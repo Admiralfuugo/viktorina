@@ -13,6 +13,7 @@ DB_PATH = os.getenv("DB_PATH", "viktorina.db")
 
 PANEL_HOST = os.getenv("PANEL_HOST", "127.0.0.1")
 PANEL_PORT = int(os.getenv("PANEL_PORT", "8000"))
-PANEL_USER = os.getenv("PANEL_USER", "admin")
+PANEL_URL = os.getenv("PANEL_URL", f"http://{PANEL_HOST}:{PANEL_PORT}")
+PANEL_USER =os.getenv("PANEL_USER", "admin")
 PANEL_PASSWORD = os.getenv("PANEL_PASSWORD", "")
 SECRET_KEY = os.getenv("SECRET_KEY", BOT_TOKEN)

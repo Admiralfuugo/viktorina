@@ -19,3 +19,13 @@ Kanalda viktorina savoli joylanadi, foydalanuvchilar «Javob berish» tugmasi or
 - G'olib tanlangach viktorina yopiladi, kanal postidagi tugma olib tashlanadi.
 
 Har bir foydalanuvchi bitta viktorinaga faqat bir marta javob bera oladi.
+
+## Serverga joylash (Coolify)
+1. Coolify → **New Resource** → GitHub repozitoriy (`viktorina`), branch `main`.
+2. **Build Pack:** `Dockerfile`.
+3. **Ports Exposes:** `8000`. **Domains:** `https://panel.sizningdomen.uz` (DNS'da A-yozuv server IP'siga).
+4. **Environment Variables:** `BOT_TOKEN`, `ADMIN_IDS`, `CHANNEL_ID`, `PANEL_USER`, `PANEL_PASSWORD`, `SECRET_KEY`, `PANEL_URL=https://panel.sizningdomen.uz`.
+5. **Storages:** volume qo'shing, Destination Path: `/data` (baza shu yerda saqlanadi, aks holda har deployda o'chadi).
+6. **Deploy**. Keyin GitHub'ga har push qilinganda avtomatik yangilanadi (Coolify GitHub App yoki webhook orqali).
+
+Muhim: bot faqat bitta joyda ishlashi kerak. Serverda ishga tushgach, kompyuterdagi `python bot.py` ni to'xtating.

@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 import db
 import keyboards as kb
 import services
-from config import PANEL_HOST, PANEL_PORT
+from config import PANEL_URL
 
 
 class IsAdmin(BaseFilter):
@@ -38,7 +38,7 @@ async def admin_help(message: Message):
         "/new — yangi viktorina joylash\n"
         "/quizzes — viktorinalar va javoblar ro'yxati\n"
         "/cancel — bekor qilish\n\n"
-        f"Veb-panel: http://{PANEL_HOST}:{PANEL_PORT}"
+        f"Veb-panel: {PANEL_URL}"
     )
 
 
