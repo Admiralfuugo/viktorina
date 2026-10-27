@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Viktorinalar</h1>
+
+<div class="card">
+  <h2>➕ Yangi viktorina</h2>
+  {% if not channels %}
+    <p class="muted">Avval <a href="/channels">kanal qo'shing</a>.</p>
+  {% else %}
+  <form method="post" action="/quiz/new" enctype="multipart/form-data">
+    <label>Kanal</label>
+    <select name="channel_id">
+      {% for c in channels %}<option value="{{ c.id }}">{{ c.title }}</option>{% endfor %}
+    </select>
+    <label>Savol matni <span class="hint">— HTML teglar mumkin: &lt;b&gt;qalin&lt;/b&gt;, &lt;i&gt;kursiv&lt;/i&gt;</span></label>
+    <textarea name="text" required></textarea>
+    <label>Rasm <span class="hint">(ixtiyoriy)</span></label>
+    <input type="file" name="photo" accept="image/*">
+    <div style="margin-top:16px"><button type="submit">Kanalga joylash</button></div>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Barcha viktorinalar</h2>
+  {% if not quizzes %}
+    <p class="muted">Hali viktorina yo'q.</p>
+  {% else %}
+  <div class="table-scroll"><table>
+    <tr><th>#</th><th>Savol</th><th>Holat</th><th>Javoblar</th><th>Yaratilgan</th><th></th></tr>
+    {% for q in quizzes %}
+    <tr>
+      <td>{{ q.id }}</td>
+      <td>{{ q.title[:80] }}{% if q.title|length > 80 %}…{% endif %}</td>
+      <td><span class="badge {{ q.status }}">{{ 'faol' if q.status == 'active' else 'yopilgan' }}</span></td>
+      <td>{{ q.cnt }}</td>
+      <td class="muted">{{ q.created_at }}</td>
+      <td><a class="btn sm ghost" href="/quiz/{{ q.id }}">Ochish</a></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+{% endblock %}

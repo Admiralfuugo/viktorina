@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Kirish{% endblock %}
+{% block content %}
+<div class="card" style="max-width:380px;margin:60px auto">
+  <h1> Admin panelga kirish</h1>
+  {% if no_password %}
+    <div class="flash err">.env faylida PANEL_PASSWORD o'rnatilmagan. Uni qo'shing va botni qayta ishga tushiring.</div>
+  {% endif %}
+  <form method="post" action="/login">
+    <label>Login</label>
+    <input type="text" name="username" required autofocus>
+    <label>Parol</label>
+    <input type="password" name="password" required>
+    <div style="margin-top:16px"><button type="submit">Kirish</button></div>
+  </form>
+</div>
+{% endblock %}

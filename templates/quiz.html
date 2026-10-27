@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Viktorina #{{ quiz.id }}{% endblock %}
+{% block content %}
+<div class="row" style="justify-content:space-between;margin-bottom:16px">
+  <h1 style="margin:0">Viktorina #{{ quiz.id }}
+    <span class="badge {{ quiz.status }}">{{ 'faol' if quiz.status == 'active' else 'yopilgan' }}</span></h1>
+  <a href="/" class="btn ghost">← Orqaga</a>
+</div>
+
+{% if winner %}
+<div class="card" style="border-color:#facc15">
+  🏆 <b>G'olib:</b> {{ winner.full_name }}
+  {% if winner.username %}(@{{ winner.username }}){% endif %} — «{{ winner.text }}»
+  <span class="muted">· {{ winner.received_at|t }}</span>
+</div>
+{% endif %}
+
+<div class="grid">
+  <div class="card">
+    <h2>Savol</h2>
+    <form method="post" action="/quiz/{{ quiz.id }}/edit">
+      <textarea name="text" required>{{ quiz.title }}</textarea>
+      <div style="margin-top:10px"><button type="submit" class="sm">Saqlash (kanalda ham o'zgaradi)</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <h2>Boshqaruv</h2>
+    <div class="row">
+      {% if quiz.status == 'active' %}
+        <form class="inline" method="post" action="/quiz/{{ quiz.id }}/close"
+              onsubmit="return confirm('G\'olibsiz yopilsinmi?')"><button class="ghost">🔒 G'olibsiz yopish</button></form>
+      {% else %}
+        <form class="inline" method="post" action="/quiz/{{ quiz.id }}/reopen"
+              onsubmit="return confirm('Qayta ochilsinmi? G\'olib bekor qilinadi.')"><button class="ghost">🔓 Qayta ochish</button></form>
+      {% endif %}
+      <a class="btn ghost" href="/quiz/{{ quiz.id }}/export">📥 Excelga yuklash</a>
+    </div>
+    <form method="post" action="/quiz/{{ quiz.id }}/delete" style="margin-top:16px"
+          onsubmit="return confirm('Viktorina va barcha javoblar o\'chirilsinmi?')">
+      <label style="font-weight:400"><input type="checkbox" name="from_channel" value="1" checked> Kanal postini ham o'chirish</label>
+      <button class="danger sm" style="margin-top:6px">🗑 Viktorinani o'chirish</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <h2 style="margin:0">Javoblar (kelgan vaqt tartibida)</h2>
+    <span class="muted" id="live">● har 5 soniyada yangilanadi</span>
+  </div>
+  <div class="table-scroll"><table>
+    <thead><tr><th>№</th><th>Vaqt</th><th>Foydalanuvchi</th><th>Javob</th><th></th></tr></thead>
+    <tbody id="rows">{% include "_rows.html" %}</tbody>
+  </table></div>
+</div>
+
+<script>
+  setInterval(async () => {
+    try {
+      const r = await fetch("/quiz/{{ quiz.id }}/rows", {cache: "no-store"});
+      if (r.redirected) { location.href = r.url; return; }
+      if (r.ok) document.getElementById("rows").innerHTML = await r.text();
+    } catch (e) {}
+  }, 5000);
+</script>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% for a in answers %}
+<tr class="{{ 'win' if a.id == quiz.winner_answer_id }}">
+  <td><b>{{ loop.index }}</b></td>
+  <td class="mono">{{ a.received_at|t }}</td>
+  <td>{{ a.full_name }}<br><span class="muted">{% if a.username %}@{{ a.username }}{% else %}id{{ a.user_id }}{% endif %}</span></td>
+  <td>{{ a.text }}</td>
+  <td style="white-space:nowrap">
+    {% if quiz.status == 'active' %}
+    <form class="inline" method="post" action="/answer/{{ a.id }}/win"
+          onsubmit='return confirm({{ (a.full_name ~ " g&#39;olib deb tasdiqlansinmi? Unga tabrik xabari yuboriladi.")|tojson }})'>
+      <button class="ok sm">🏆 G'olib</button></form>
+    {% elif a.id == quiz.winner_answer_id %}🏆{% endif %}
+    <form class="inline" method="post" action="/answer/{{ a.id }}/delete"
+          onsubmit="return confirm('Javob o\'chirilsinmi?')"><button class="ghost sm" title="O'chirish">✕</button></form>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">Hali javob yo'q.</td></tr>
+{% endfor %}

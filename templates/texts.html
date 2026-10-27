@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Bot matnlari{% endblock %}
+{% block content %}
+<h1>Bot matnlari</h1>
+<p class="muted">Bot foydalanuvchilarga yuboradigan xabarlar. HTML teglar mumkin: &lt;b&gt;, &lt;i&gt;, &lt;a href=""&gt;. Saqlangach darhol ishlaydi.</p>
+<form method="post" action="/texts" class="card">
+  {% for key, label, value, default in items %}
+    <label>{{ label }}
+      {% if value != default %}<span class="badge active">o'zgartirilgan</span>{% endif %}</label>
+    <textarea name="{{ key }}" rows="2" style="min-height:60px">{{ value }}</textarea>
+    {% if value != default %}
+      <div class="hint">Standart: {{ default }}
+        <button class="ghost sm" formaction="/texts/{{ key }}/reset" formnovalidate>Tiklash</button></div>
+    {% endif %}
+  {% endfor %}
+  <div style="margin-top:18px"><button type="submit">Saqlash</button></div>
+</form>
+{% endblock %}

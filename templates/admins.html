@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Adminlar{% endblock %}
+{% block content %}
+<h1>Adminlar</h1>
+<p class="muted">Bot ichida /admin, /new, /quizzes buyruqlaridan foydalana oladigan va yangi javoblar haqida xabar oladigan Telegram foydalanuvchilar.</p>
+<div class="grid">
+  <div class="card">
+    <h2>Ro'yxat</h2>
+    <table>
+      <tr><th>Telegram ID</th><th>Ism</th><th></th></tr>
+      {% for a in admins %}
+      <tr>
+        <td class="mono">{{ a.user_id }}</td>
+        <td>{{ a.name or '—' }}</td>
+        <td><form class="inline" method="post" action="/admins/{{ a.user_id }}/delete"
+                  onsubmit="return confirm('Admin o\'chirilsinmi?')"><button class="ghost sm">O'chirish</button></form></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">Admin yo'q.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  <div class="card">
+    <h2>➕ Admin qo'shish</h2>
+    <form method="post" action="/admins/add">
+      <label>Telegram ID <span class="hint">— @userinfobot orqali bilib olinadi</span></label>
+      <input type="text" name="user_id" inputmode="numeric" required>
+      <label>Ism <span class="hint">(ixtiyoriy)</span></label>
+      <input type="text" name="name">
+      <div style="margin-top:16px"><button type="submit">Qo'shish</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}
