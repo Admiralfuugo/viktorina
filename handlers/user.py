@@ -5,7 +5,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import Message, Update
 
 import db
 import texts
@@ -46,8 +46,8 @@ async def start_plain(message: Message):
 
 
 @router.message(AnswerState.waiting, F.text)
-async def receive_answer(message: Message, state: FSMContext, bot: Bot):
-    # Aniq tartib uchun bot qabul qilgan vaqt (mikrosekund bilan) saqlanadi
+async def receive_answer(message: Message, state: FSMContext, bot: Bot, event_update: Update):
+    # Tartib Telegram update_id bo'yicha: handlerlar parallel ishlasa ham to'g'ri qoladi
     received_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
     quiz_id = (await state.get_data())["quiz_id"]
     await state.clear()
@@ -59,7 +59,8 @@ async def receive_answer(message: Message, state: FSMContext, bot: Bot):
 
     user = message.from_user
     ok = await db.add_answer(
-        quiz_id, user.id, user.username, user.full_name, message.text, received_at
+        quiz_id, user.id, user.username, user.full_name, message.text, received_at,
+        event_update.update_id,
     )
     if not ok:
         await message.answer(await texts.get("already"))
@@ -83,3 +84,9 @@ async def receive_answer(message: Message, state: FSMContext, bot: Bot):
 @router.message(AnswerState.waiting)
 async def receive_non_text(message: Message):
     await message.answer(await texts.get("text_only"))
+
+
+@router.message(F.chat.type == "private")
+async def no_state(message: Message):
+    # Holat yo'q (masalan, bot qayta ishga tushgan) — tugmani qayta bosishni so'raymiz
+    await message.answer(await texts.get("start"))

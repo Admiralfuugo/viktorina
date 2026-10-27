@@ -1,6 +1,8 @@
 """Veb admin panel (FastAPI). Bot bilan bitta jarayonda ishlaydi."""
 import io
 import secrets
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
@@ -13,12 +15,13 @@ from starlette.middleware.sessions import SessionMiddleware
 import db
 import services
 import texts
-from config import PANEL_PASSWORD, PANEL_USER, SECRET_KEY
+from config import PANEL_PASSWORD, PANEL_SECURE, PANEL_USER, SECRET_KEY
 
 TZ = timezone(timedelta(hours=5))  # Toshkent vaqti
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="strict", max_age=7 * 24 * 3600)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="strict",
+                   https_only=PANEL_SECURE, max_age=7 * 24 * 3600)
 templates = Jinja2Templates(directory="templates")
 
 
@@ -67,12 +70,33 @@ async def login_page(request: Request):
     return render(request, "login.html", no_password=not PANEL_PASSWORD)
 
 
+# Parolni terib topishdan himoya: IP bo'yicha 15 daqiqada 5 ta xato urinish
+MAX_FAILS, FAIL_WINDOW = 5, 15 * 60
+_fails: dict[str, deque] = defaultdict(deque)
+
+
+def client_ip(request: Request) -> str:
+    # Coolify proxy'si haqiqiy IP'ni X-Forwarded-For oxiriga qo'shadi
+    # (boshidagi qiymatlarni mijoz o'zi soxtalashtirishi mumkin)
+    forwarded = request.headers.get("x-forwarded-for")
+    return forwarded.split(",")[-1].strip() if forwarded else request.client.host
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    ip, now = client_ip(request), time.monotonic()
+    fails = _fails[ip]
+    while fails and now - fails[0] > FAIL_WINDOW:
+        fails.popleft()
+    if len(fails) >= MAX_FAILS:
+        flash(request, "Juda ko'p urinish. 15 daqiqadan keyin qayta urinib ko'ring.", "err")
+        return back("/login")
     if PANEL_PASSWORD and secrets.compare_digest(username, PANEL_USER) \
             and secrets.compare_digest(password, PANEL_PASSWORD):
+        fails.clear()
         request.session["auth"] = True
         return back("/")
+    fails.append(now)
     flash(request, "Login yoki parol noto'g'ri", "err")
     return back("/login")
 

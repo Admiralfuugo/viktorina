@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS channels (
 MIGRATIONS = [
     "ALTER TABLE quizzes ADD COLUMN channel_chat_id TEXT",
     "ALTER TABLE quizzes ADD COLUMN has_photo INTEGER NOT NULL DEFAULT 0",
+    # Telegram update_id — Telegram serveriga kelish tartibi (eng aniq "kim birinchi")
+    "ALTER TABLE answers ADD COLUMN update_id INTEGER",
 ]
 
 
@@ -205,13 +207,14 @@ async def close_quiz(quiz_id: int, winner_answer_id: int | None = None) -> bool:
 # --- Javoblar ---
 
 async def add_answer(quiz_id: int, user_id: int, username: str | None,
-                     full_name: str, text: str, received_at: str) -> bool:
+                     full_name: str, text: str, received_at: str,
+                     update_id: int | None = None) -> bool:
     """Javobni saqlaydi. Foydalanuvchi oldin javob bergan bo'lsa False."""
     try:
         await _execute(
-            "INSERT INTO answers (quiz_id, user_id, username, full_name, text, received_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (quiz_id, user_id, username, full_name, text, received_at),
+            "INSERT INTO answers (quiz_id, user_id, username, full_name, text, received_at, update_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (quiz_id, user_id, username, full_name, text, received_at, update_id),
         )
     except aiosqlite.IntegrityError:
         return False
@@ -226,9 +229,10 @@ async def has_answered(quiz_id: int, user_id: int) -> bool:
 
 
 async def list_answers(quiz_id: int, offset: int = 0, limit: int = -1):
-    # Vaqt bo'yicha, bir xil vaqtda kelganlar qabul tartibida (id)
+    # Telegram'ga kelish tartibi (update_id); eski yozuvlarda — bot qabul qilgan vaqt
     return await _fetchall(
-        "SELECT * FROM answers WHERE quiz_id = ? ORDER BY received_at, id LIMIT ? OFFSET ?",
+        "SELECT * FROM answers WHERE quiz_id = ? "
+        "ORDER BY update_id IS NULL, update_id, received_at, id LIMIT ? OFFSET ?",
         (quiz_id, limit, offset),
     )
 
