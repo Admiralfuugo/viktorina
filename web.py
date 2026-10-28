@@ -1,4 +1,5 @@
 """Veb admin panel (FastAPI). Bot bilan bitta jarayonda ishlaydi."""
+import hashlib
 import io
 import secrets
 import time
@@ -83,6 +84,21 @@ def client_ip(request: Request) -> str:
     return forwarded.split(",")[-1].strip() if forwarded else request.client.host
 
 
+# Paneldan o'zgartirilgan parol bazada xesh ko'rinishida saqlanadi va .env'dagidan ustun turadi
+def hash_password(password: str, salt: bytes | None = None) -> str:
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return f"{salt.hex()}${digest.hex()}"
+
+
+async def check_password(password: str) -> bool:
+    stored = (await db.get_settings()).get("panel_password_hash")
+    if stored:
+        salt, _ = stored.split("$", 1)
+        return secrets.compare_digest(hash_password(password, bytes.fromhex(salt)), stored)
+    return bool(PANEL_PASSWORD) and secrets.compare_digest(password, PANEL_PASSWORD)
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     ip, now = client_ip(request), time.monotonic()
@@ -92,14 +108,33 @@ async def login(request: Request, username: str = Form(...), password: str = For
     if len(fails) >= MAX_FAILS:
         flash(request, "Juda ko'p urinish. 15 daqiqadan keyin qayta urinib ko'ring.", "err")
         return back("/login")
-    if PANEL_PASSWORD and secrets.compare_digest(username, PANEL_USER) \
-            and secrets.compare_digest(password, PANEL_PASSWORD):
+    if secrets.compare_digest(username, PANEL_USER) and await check_password(password):
         fails.clear()
         request.session["auth"] = True
         return back("/")
     fails.append(now)
     flash(request, "Login yoki parol noto'g'ri", "err")
     return back("/login")
+
+
+@app.get("/password", response_class=HTMLResponse, dependencies=[Depends(auth)])
+async def password_page(request: Request):
+    return render(request, "password.html")
+
+
+@app.post("/password", dependencies=[Depends(auth)])
+async def password_change(request: Request, current: str = Form(...),
+                          new: str = Form(...), confirm: str = Form(...)):
+    if not await check_password(current):
+        flash(request, "Joriy parol noto'g'ri", "err")
+    elif len(new) < 8:
+        flash(request, "Yangi parol kamida 8 belgidan iborat bo'lishi kerak", "err")
+    elif new != confirm:
+        flash(request, "Yangi parollar bir-biriga mos emas", "err")
+    else:
+        await db.set_setting("panel_password_hash", hash_password(new))
+        flash(request, "Parol yangilandi")
+    return back("/password")
 
 
 @app.get("/logout")
