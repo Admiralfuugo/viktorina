@@ -118,6 +118,7 @@ async def dashboard(request: Request):
 
 @app.post("/quiz/new", dependencies=[Depends(auth)])
 async def quiz_new(request: Request, channel_id: int = Form(...), text: str = Form(...),
+                   reveal_text: str = Form(""),
                    photo: UploadFile | None = File(None), bot: Bot = Depends(get_bot)):
     channel = await db.get_channel(channel_id)
     if channel is None:
@@ -126,7 +127,8 @@ async def quiz_new(request: Request, channel_id: int = Form(...), text: str = Fo
     data = await photo.read() if photo and photo.filename else None
     try:
         quiz_id = await services.publish_text(bot, channel["chat_id"], text.strip(), data,
-                                              photo.filename if data else "photo.jpg")
+                                              photo.filename if data else "photo.jpg",
+                                              reveal_text=reveal_text.strip())
     except Exception as e:
         flash(request, f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring.", "err")
         return back("/")
@@ -166,6 +168,14 @@ async def quiz_edit(request: Request, quiz_id: int, text: str = Form(...), bot: 
         flash(request, "Savol yangilandi (kanalda ham)")
     except Exception as e:
         flash(request, f"Tahrirlab bo'lmadi: {e}", "err")
+    return back(f"/quiz/{quiz_id}")
+
+
+@app.post("/quiz/{quiz_id}/reveal", dependencies=[Depends(auth)])
+async def quiz_reveal(request: Request, quiz_id: int, reveal_text: str = Form("")):
+    await _quiz_or_404(quiz_id)
+    await db.update_reveal_text(quiz_id, reveal_text.strip())
+    flash(request, "To'g'ri javob saqlandi")
     return back(f"/quiz/{quiz_id}")
 
 
@@ -262,7 +272,7 @@ async def qa_list(request: Request):
 
 @app.post("/qa/new", dependencies=[Depends(auth)])
 async def qa_new(request: Request, channel_id: int = Form(...), text: str = Form(...),
-                 answers: str = Form(...), max_attempts: int = Form(3),
+                 answers: str = Form(...), max_attempts: int = Form(3), reveal_text: str = Form(""),
                  photo: UploadFile | None = File(None), bot: Bot = Depends(get_bot)):
     if not matcher.variants(answers):
         flash(request, "Kamida bitta to'g'ri javob kiriting", "err")
@@ -276,7 +286,7 @@ async def qa_new(request: Request, channel_id: int = Form(...), text: str = Form
         quiz_id = await services.publish_text(
             bot, channel["chat_id"], text.strip(), data, photo.filename if data else "photo.jpg",
             mode="auto", correct_answers="\n".join(matcher.variants(answers)),
-            max_attempts=_attempts_arg(max_attempts),
+            max_attempts=_attempts_arg(max_attempts), reveal_text=reveal_text.strip(),
         )
     except Exception as e:
         flash(request, f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring.", "err")
@@ -309,12 +319,14 @@ async def qa_rows(request: Request, quiz_id: int):
 
 
 @app.post("/qa/{quiz_id}/answers", dependencies=[Depends(auth)])
-async def qa_answers(request: Request, quiz_id: int, answers: str = Form(...), max_attempts: int = Form(...)):
+async def qa_answers(request: Request, quiz_id: int, answers: str = Form(...), max_attempts: int = Form(...),
+                     reveal_text: str = Form("")):
     await _qa_or_404(quiz_id)
     if not matcher.variants(answers):
         flash(request, "Kamida bitta to'g'ri javob kiriting", "err")
         return back(f"/qa/{quiz_id}")
     await db.update_quiz_answers(quiz_id, "\n".join(matcher.variants(answers)), _attempts_arg(max_attempts))
+    await db.update_reveal_text(quiz_id, reveal_text.strip())
     flash(request, "To'g'ri javoblar va urinishlar soni saqlandi (keyingi javoblarga qo'llanadi)")
     return back(f"/qa/{quiz_id}")
 
@@ -428,8 +440,27 @@ async def channels_add(request: Request, chat_id: str = Form(...), bot: Bot = De
     if member.status not in ("administrator", "creator"):
         flash(request, "Bot bu kanalda admin emas. Avval botni kanalga admin qiling.", "err")
         return back("/channels")
-    await db.add_channel(str(chat.id), chat.title or chat_id)
+    # Obuna tugmasi uchun havola: ochiq kanalda @username, yopiqda taklif havolasi
+    link = f"https://t.me/{chat.username}" if chat.username else chat.invite_link
+    if not link:
+        try:
+            link = await bot.export_chat_invite_link(chat.id)
+        except Exception:
+            link = None
+    await db.add_channel(str(chat.id), chat.title or chat_id, link)
     flash(request, f"Kanal qo'shildi: {chat.title}")
+    return back("/channels")
+
+
+@app.post("/channels/{channel_id}/update", dependencies=[Depends(auth)])
+async def channels_update(request: Request, channel_id: int, required: str | None = Form(None),
+                          link: str = Form("")):
+    link = link.strip()
+    if link and not link.startswith(("https://t.me/", "http://t.me/", "tg://")):
+        flash(request, "Havola https://t.me/... ko'rinishida bo'lishi kerak", "err")
+        return back("/channels")
+    await db.update_channel(channel_id, bool(required), link or None)
+    flash(request, "Kanal sozlamalari saqlandi")
     return back("/channels")
 
 

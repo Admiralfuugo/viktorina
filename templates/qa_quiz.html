@@ -20,6 +20,8 @@
     <form method="post" action="/qa/{{ quiz.id }}/answers">
       <textarea name="answers" required>{{ quiz.correct_answers }}</textarea>
       <div class="hint">Har bir variant alohida qatorda.</div>
+      <label>🔑 Ko'rsatiladigan javob <span class="hint">— bo'sh bo'lsa birinchi variant</span></label>
+      <input type="text" name="reveal_text" value="{{ quiz.reveal_text }}">
       <label>Urinishlar soni</label>
       <select name="max_attempts">
         {% for n in range(1, max_attempts + 1) %}<option value="{{ n }}" {{ 'selected' if n == quiz.max_attempts }}>{{ n }}</option>{% endfor %}

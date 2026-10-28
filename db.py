@@ -58,6 +58,10 @@ MIGRATIONS = [
     "ALTER TABLE quizzes ADD COLUMN mode TEXT NOT NULL DEFAULT 'manual'",
     "ALTER TABLE quizzes ADD COLUMN correct_answers TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE quizzes ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1",
+    # Majburiy obuna va to'g'ri javobni ochish
+    "ALTER TABLE quizzes ADD COLUMN reveal_text TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE channels ADD COLUMN required INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE channels ADD COLUMN link TEXT",
 ]
 
 
@@ -155,12 +159,22 @@ async def get_channel(channel_id: int):
     return await _fetchone("SELECT * FROM channels WHERE id = ?", (channel_id,))
 
 
-async def add_channel(chat_id: str, title: str) -> None:
+async def add_channel(chat_id: str, title: str, link: str | None = None) -> None:
     await _execute(
-        "INSERT INTO channels (chat_id, title) VALUES (?, ?) "
-        "ON CONFLICT(chat_id) DO UPDATE SET title = excluded.title",
-        (chat_id, title),
+        "INSERT INTO channels (chat_id, title, link) VALUES (?, ?, ?) "
+        "ON CONFLICT(chat_id) DO UPDATE SET title = excluded.title, link = excluded.link",
+        (chat_id, title, link),
     )
+
+
+async def update_channel(channel_id: int, required: bool, link: str | None) -> None:
+    await _execute(
+        "UPDATE channels SET required = ?, link = ? WHERE id = ?", (int(required), link, channel_id)
+    )
+
+
+async def required_channels():
+    return await _fetchall("SELECT * FROM channels WHERE required = 1 ORDER BY id")
 
 
 async def remove_channel(channel_id: int) -> None:
@@ -170,13 +184,18 @@ async def remove_channel(channel_id: int) -> None:
 # --- Viktorinalar ---
 
 async def create_quiz(title: str, channel_chat_id: str, has_photo: bool = False,
-                      mode: str = "manual", correct_answers: str = "", max_attempts: int = 1) -> int:
+                      mode: str = "manual", correct_answers: str = "", max_attempts: int = 1,
+                      reveal_text: str = "") -> int:
     cur = await _execute(
-        "INSERT INTO quizzes (title, channel_chat_id, has_photo, mode, correct_answers, max_attempts) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (title, channel_chat_id, int(has_photo), mode, correct_answers, max_attempts),
+        "INSERT INTO quizzes (title, channel_chat_id, has_photo, mode, correct_answers, max_attempts, reveal_text) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (title, channel_chat_id, int(has_photo), mode, correct_answers, max_attempts, reveal_text),
     )
     return cur.lastrowid
+
+
+async def update_reveal_text(quiz_id: int, reveal_text: str) -> None:
+    await _execute("UPDATE quizzes SET reveal_text = ? WHERE id = ?", (reveal_text, quiz_id))
 
 
 async def update_quiz_answers(quiz_id: int, correct_answers: str, max_attempts: int) -> None:

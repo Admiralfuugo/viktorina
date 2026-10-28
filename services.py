@@ -18,10 +18,11 @@ async def _markup(bot: Bot, quiz_id: int):
 
 async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = None,
                        photo_name: str = "photo.jpg", mode: str = "manual",
-                       correct_answers: str = "", max_attempts: int = 1) -> int:
+                       correct_answers: str = "", max_attempts: int = 1, reveal_text: str = "") -> int:
     """Paneldan viktorina joylash. Xato bo'lsa exception ko'taradi."""
     quiz_id = await db.create_quiz(text, chat_id, has_photo=photo is not None, mode=mode,
-                                   correct_answers=correct_answers, max_attempts=max_attempts)
+                                   correct_answers=correct_answers, max_attempts=max_attempts,
+                                   reveal_text=reveal_text)
     try:
         markup = await _markup(bot, quiz_id)
         if photo:

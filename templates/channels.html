@@ -2,31 +2,42 @@
 {% block title %}Kanallar{% endblock %}
 {% block content %}
 <h1>Kanallar</h1>
-<div class="grid">
-  <div class="card">
-    <h2>Ro'yxat</h2>
-    <table>
-      <tr><th>Nomi</th><th>ID</th><th></th></tr>
-      {% for c in channels %}
-      <tr>
+
+<div class="card">
+  <h2>Ro'yxat</h2>
+  <p class="hint">🔒 <b>Majburiy obuna</b> belgilangan kanallarga obuna bo'lmagan foydalanuvchi
+    to'g'ri javobni ko'ra olmaydi. Obunani tekshirish uchun bot o'sha kanalda admin bo'lishi kerak.</p>
+  <div class="table-scroll"><table>
+    <tr><th>Nomi</th><th>ID</th><th>Obuna havolasi</th><th>Majburiy</th><th></th></tr>
+    {% for c in channels %}
+    <tr>
         <td>{{ c.title }}</td>
         <td class="mono">{{ c.chat_id }}</td>
-        <td><form class="inline" method="post" action="/channels/{{ c.id }}/delete"
-                  onsubmit="return confirm('Kanal o\'chirilsinmi?')"><button class="ghost sm">O'chirish</button></form></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="3" class="muted">Kanal yo'q.</td></tr>
-      {% endfor %}
-    </table>
-  </div>
-  <div class="card">
-    <h2>➕ Kanal qo'shish</h2>
-    <p class="muted">Avval botni kanalga <b>admin</b> qilib qo'shing (xabar joylash va tahrirlash huquqi bilan).</p>
-    <form method="post" action="/channels/add">
-      <label>Kanal <span class="hint">— @username yoki -100… ID</span></label>
-      <input type="text" name="chat_id" required placeholder="@mening_kanalim">
-      <div style="margin-top:16px"><button type="submit">Tekshirish va qo'shish</button></div>
-    </form>
-  </div>
+        <td style="min-width:220px">
+          <input type="text" name="link" form="ch{{ c.id }}" value="{{ c.link or '' }}"
+                 placeholder="{{ 'https://t.me/' ~ c.chat_id[1:] if c.chat_id.startswith('@') else 'https://t.me/+...' }}">
+          {% if not c.link and not c.chat_id.startswith('@') %}
+            <div class="hint" style="color:var(--err)">Havola yo'q — obuna tugmasi chiqmaydi</div>
+          {% endif %}
+        </td>
+        <td><label style="font-weight:400;margin:0"><input type="checkbox" name="required" value="1" form="ch{{ c.id }}" {{ 'checked' if c.required }}> 🔒</label></td>
+        <td style="white-space:nowrap">
+        <form class="inline" id="ch{{ c.id }}" method="post" action="/channels/{{ c.id }}/update"><button class="sm">Saqlash</button></form>
+        <form class="inline" method="post" action="/channels/{{ c.id }}/delete"
+              onsubmit="return confirm('Kanal o\'chirilsinmi?')"><button class="ghost sm">O'chirish</button></form></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">Kanal yo'q.</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>➕ Kanal qo'shish</h2>
+  <p class="muted">Avval botni kanalga <b>admin</b> qilib qo'shing (xabar joylash va tahrirlash huquqi bilan).</p>
+  <form method="post" action="/channels/add" class="row">
+    <input type="text" name="chat_id" required placeholder="@mening_kanalim yoki -100…" style="flex:1">
+    <button type="submit">Tekshirish va qo'shish</button>
+  </form>
 </div>
 {% endblock %}

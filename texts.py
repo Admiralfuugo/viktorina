@@ -21,6 +21,15 @@ DEFAULTS: dict[str, tuple[str, str]] = {
     "qa_wrong_last": ("Savol-javob: noto'g'ri, urinish tugadi", "❌ Noto'g'ri javob. Urinishlaringiz tugadi."),
     "qa_solved": ("Savol-javob: oldin topgan", "Siz bu savolga allaqachon to'g'ri javob bergansiz ✅"),
     "qa_limit": ("Savol-javob: urinish tugagan", "Bu savol uchun urinishlaringiz tugagan."),
+    # To'g'ri javobni ochish (majburiy obuna)
+    "reveal_btn": ("Tugma: to'g'ri javobni ko'rish", "🔑 To'g'ri javobni ko'rish"),
+    "subscribe_need": ("Obuna bo'lish talabi",
+                       "To'g'ri javobni ko'rish uchun quyidagi kanallarga obuna bo'ling, so'ng «Tekshirish» tugmasini bosing:"),
+    "check_btn": ("Tugma: obunani tekshirish", "✅ Tekshirish"),
+    "not_subscribed": ("Hali obuna bo'lmagan (qisqa ogohlantirish)", "Siz hali barcha kanallarga obuna bo'lmagansiz"),
+    "reveal": ("To'g'ri javob ({answer} — javob)", "🔑 To'g'ri javob: <b>{answer}</b>"),
+    "reveal_wait": ("Javob hali ochilmaydi", "To'g'ri javob viktorina yakunlangach ochiladi."),
+    "reveal_none": ("To'g'ri javob kiritilmagan", "Bu savol uchun to'g'ri javob hali e'lon qilinmagan."),
 }
 
 

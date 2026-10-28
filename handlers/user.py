@@ -1,14 +1,17 @@
 import html
+import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, Update
+from aiogram.types import CallbackQuery, Message, Update
 
 import db
+import keyboards as kb
 import matcher
+import services
 import texts
 from config import NOTIFY_ADMINS
 
@@ -31,7 +34,7 @@ async def start_with_quiz(message: Message, command: CommandObject, state: FSMCo
         await message.answer(await texts.get("not_found"))
         return
     if quiz["status"] != "active":
-        await message.answer(await texts.get("closed"))
+        await message.answer(await texts.get("closed"), reply_markup=await reveal_markup(quiz))
         return
     if quiz["mode"] == "auto":
         used, solved = await db.user_attempt_state(quiz_id, message.from_user.id)
@@ -39,7 +42,7 @@ async def start_with_quiz(message: Message, command: CommandObject, state: FSMCo
             await message.answer(await texts.get("qa_solved"))
             return
         if used >= quiz["max_attempts"]:
-            await message.answer(await texts.get("qa_limit"))
+            await message.answer(await texts.get("qa_limit"), reply_markup=await reveal_markup(quiz))
             return
         await state.set_state(AnswerState.waiting)
         await state.update_data(quiz_id=quiz_id)
@@ -69,7 +72,8 @@ async def receive_answer(message: Message, state: FSMContext, bot: Bot, event_up
     quiz = await db.get_quiz(quiz_id)
     if quiz is None or quiz["status"] != "active":
         await state.clear()
-        await message.answer(await texts.get("closed"))
+        await message.answer(await texts.get("closed"),
+                             reply_markup=await reveal_markup(quiz) if quiz else None)
         return
     if quiz["mode"] == "auto":
         await check_answer(message, state, quiz, received_at, event_update.update_id)
@@ -110,7 +114,10 @@ async def check_answer(message: Message, state: FSMContext, quiz, received_at: s
     )
     if result != "saved":
         await state.clear()
-        await message.answer(await texts.get("qa_solved" if result == "solved" else "qa_limit"))
+        if result == "solved":
+            await message.answer(await texts.get("qa_solved"))
+        else:
+            await message.answer(await texts.get("qa_limit"), reply_markup=await reveal_markup(quiz))
         return
     if correct:
         await state.clear()
@@ -123,7 +130,83 @@ async def check_answer(message: Message, state: FSMContext, quiz, received_at: s
         await message.answer(await texts.get("qa_wrong", left=left))
     else:
         await state.clear()
-        await message.answer(await texts.get("qa_wrong_last"))
+        await message.answer(await texts.get("qa_wrong_last"), reply_markup=await reveal_markup(quiz))
+
+
+# --- To'g'ri javobni ochish (majburiy obuna) ---
+
+def reveal_answer(quiz) -> str:
+    """Ko'rsatiladigan javob: admin yozgani yoki Savol-javobda birinchi to'g'ri variant."""
+    if quiz["reveal_text"].strip():
+        return quiz["reveal_text"].strip()
+    if quiz["mode"] == "auto":
+        found = matcher.variants(quiz["correct_answers"])
+        return found[0] if found else ""
+    return ""
+
+
+async def reveal_markup(quiz):
+    if not reveal_answer(quiz):
+        return None
+    return kb.reveal_kb(quiz["id"], await texts.get("reveal_btn"))
+
+
+async def can_reveal(quiz, user_id: int) -> bool:
+    # Ochiq viktorinada javob faqat urinishlarini tugatganlarga ochiladi
+    if quiz["status"] != "active":
+        return True
+    if quiz["mode"] == "auto":
+        used, solved = await db.user_attempt_state(quiz["id"], user_id)
+        return solved or used >= quiz["max_attempts"]
+    return False
+
+
+async def missing_subscriptions(bot: Bot, user_id: int):
+    missing = []
+    for channel in await db.required_channels():
+        try:
+            member = await bot.get_chat_member(services.chat_ref(channel["chat_id"]), user_id)
+        except Exception:
+            # Bot kanalda admin bo'lmasa tekshirib bo'lmaydi — foydalanuvchini to'smaymiz
+            logging.warning("Obunani tekshirib bo'lmadi: %s", channel["chat_id"])
+            continue
+        subscribed = member.status in ("member", "administrator", "creator") or \
+            (member.status == "restricted" and getattr(member, "is_member", False))
+        if not subscribed:
+            missing.append(channel)
+    return missing
+
+
+@router.callback_query(F.data.startswith("rv:"))
+async def reveal(call: CallbackQuery, bot: Bot):
+    quiz = await db.get_quiz(int(call.data.split(":")[1]))
+    if quiz is None:
+        await call.answer(await texts.get("not_found"), show_alert=True)
+        return
+    answer = reveal_answer(quiz)
+    if not answer:
+        await call.answer(await texts.get("reveal_none"), show_alert=True)
+        return
+    if not await can_reveal(quiz, call.from_user.id):
+        await call.answer(await texts.get("reveal_wait"), show_alert=True)
+        return
+    missing = await missing_subscriptions(bot, call.from_user.id)
+    if missing:
+        markup = kb.subscribe_kb(missing, quiz["id"], await texts.get("check_btn"))
+        text = await texts.get("subscribe_need")
+        if call.message.text == text:
+            # Allaqachon obuna xabari ochiq — faqat ogohlantiramiz
+            await call.answer(await texts.get("not_subscribed"), show_alert=True)
+            try:
+                await call.message.edit_reply_markup(reply_markup=markup)
+            except Exception:
+                pass
+            return
+        await call.message.answer(text, reply_markup=markup)
+        await call.answer()
+        return
+    await call.message.answer(await texts.get("reveal", answer=html.escape(answer)))
+    await call.answer()
 
 
 @router.message(AnswerState.waiting)

@@ -6,6 +6,25 @@ def channel_kb(bot_username: str, quiz_id: int, text: str) -> InlineKeyboardMark
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, url=url)]])
 
 
+def reveal_kb(quiz_id: int, text: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=f"rv:{quiz_id}")]])
+
+
+def channel_url(channel) -> str | None:
+    if channel["link"]:
+        return channel["link"]
+    if channel["chat_id"].startswith("@"):
+        return f"https://t.me/{channel['chat_id'][1:]}"
+    return None
+
+
+def subscribe_kb(channels, quiz_id: int, check_text: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"➕ {c['title']}", url=channel_url(c))]
+            for c in channels if channel_url(c)]
+    rows.append([InlineKeyboardButton(text=check_text, callback_data=f"rv:{quiz_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def channels_kb(channels) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=c["title"], callback_data=f"ch:{c['id']}")] for c in channels
