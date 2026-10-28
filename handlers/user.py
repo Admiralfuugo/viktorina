@@ -8,6 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, Update
 
 import db
+import matcher
 import texts
 from config import NOTIFY_ADMINS
 
@@ -32,6 +33,20 @@ async def start_with_quiz(message: Message, command: CommandObject, state: FSMCo
     if quiz["status"] != "active":
         await message.answer(await texts.get("closed"))
         return
+    if quiz["mode"] == "auto":
+        used, solved = await db.user_attempt_state(quiz_id, message.from_user.id)
+        if solved:
+            await message.answer(await texts.get("qa_solved"))
+            return
+        if used >= quiz["max_attempts"]:
+            await message.answer(await texts.get("qa_limit"))
+            return
+        await state.set_state(AnswerState.waiting)
+        await state.update_data(quiz_id=quiz_id)
+        await message.answer(await texts.get(
+            "qa_ask", title=quiz["title"], left=quiz["max_attempts"] - used
+        ))
+        return
     if await db.has_answered(quiz_id, message.from_user.id):
         await message.answer(await texts.get("already"))
         return
@@ -50,12 +65,16 @@ async def receive_answer(message: Message, state: FSMContext, bot: Bot, event_up
     # Tartib Telegram update_id bo'yicha: handlerlar parallel ishlasa ham to'g'ri qoladi
     received_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
     quiz_id = (await state.get_data())["quiz_id"]
-    await state.clear()
 
     quiz = await db.get_quiz(quiz_id)
     if quiz is None or quiz["status"] != "active":
+        await state.clear()
         await message.answer(await texts.get("closed"))
         return
+    if quiz["mode"] == "auto":
+        await check_answer(message, state, quiz, received_at, event_update.update_id)
+        return
+    await state.clear()
 
     user = message.from_user
     ok = await db.add_answer(
@@ -79,6 +98,32 @@ async def receive_answer(message: Message, state: FSMContext, bot: Bot, event_up
                 await bot.send_message(admin["user_id"], text)
             except Exception:
                 pass
+
+
+async def check_answer(message: Message, state: FSMContext, quiz, received_at: str, update_id: int):
+    """Savol-javob: javobni darhol tekshirib, natijani aytadi."""
+    user = message.from_user
+    correct = matcher.is_correct(message.text, quiz["correct_answers"])
+    result = await db.add_attempt(
+        quiz["id"], user.id, user.username, user.full_name, message.text, correct,
+        received_at, update_id, quiz["max_attempts"],
+    )
+    if result != "saved":
+        await state.clear()
+        await message.answer(await texts.get("qa_solved" if result == "solved" else "qa_limit"))
+        return
+    if correct:
+        await state.clear()
+        await message.answer(await texts.get("qa_correct"))
+        return
+    used, _ = await db.user_attempt_state(quiz["id"], user.id)
+    left = quiz["max_attempts"] - used
+    if left > 0:
+        # Holat saqlanadi — foydalanuvchi shunchaki yana yozadi
+        await message.answer(await texts.get("qa_wrong", left=left))
+    else:
+        await state.clear()
+        await message.answer(await texts.get("qa_wrong_last"))
 
 
 @router.message(AnswerState.waiting)

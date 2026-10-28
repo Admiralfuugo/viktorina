@@ -21,6 +21,18 @@ CREATE TABLE IF NOT EXISTS answers (
     received_at TEXT NOT NULL,
     UNIQUE (quiz_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quiz_id INTEGER NOT NULL REFERENCES quizzes(id),
+    user_id INTEGER NOT NULL,
+    username TEXT,
+    full_name TEXT,
+    text TEXT NOT NULL,
+    is_correct INTEGER NOT NULL,
+    received_at TEXT NOT NULL,
+    update_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS attempts_quiz_user ON attempts (quiz_id, user_id);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -42,6 +54,10 @@ MIGRATIONS = [
     "ALTER TABLE quizzes ADD COLUMN has_photo INTEGER NOT NULL DEFAULT 0",
     # Telegram update_id — Telegram serveriga kelish tartibi (eng aniq "kim birinchi")
     "ALTER TABLE answers ADD COLUMN update_id INTEGER",
+    # Savol-javob (avtomatik tekshiruv) rejimi
+    "ALTER TABLE quizzes ADD COLUMN mode TEXT NOT NULL DEFAULT 'manual'",
+    "ALTER TABLE quizzes ADD COLUMN correct_answers TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE quizzes ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1",
 ]
 
 
@@ -153,12 +169,21 @@ async def remove_channel(channel_id: int) -> None:
 
 # --- Viktorinalar ---
 
-async def create_quiz(title: str, channel_chat_id: str, has_photo: bool = False) -> int:
+async def create_quiz(title: str, channel_chat_id: str, has_photo: bool = False,
+                      mode: str = "manual", correct_answers: str = "", max_attempts: int = 1) -> int:
     cur = await _execute(
-        "INSERT INTO quizzes (title, channel_chat_id, has_photo) VALUES (?, ?, ?)",
-        (title, channel_chat_id, int(has_photo)),
+        "INSERT INTO quizzes (title, channel_chat_id, has_photo, mode, correct_answers, max_attempts) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (title, channel_chat_id, int(has_photo), mode, correct_answers, max_attempts),
     )
     return cur.lastrowid
+
+
+async def update_quiz_answers(quiz_id: int, correct_answers: str, max_attempts: int) -> None:
+    await _execute(
+        "UPDATE quizzes SET correct_answers = ?, max_attempts = ? WHERE id = ?",
+        (correct_answers, max_attempts, quiz_id),
+    )
 
 
 async def set_channel_message(quiz_id: int, message_id: int) -> None:
@@ -172,6 +197,7 @@ async def update_quiz_title(quiz_id: int, title: str) -> None:
 async def delete_quiz(quiz_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute("DELETE FROM answers WHERE quiz_id = ?", (quiz_id,))
+        await conn.execute("DELETE FROM attempts WHERE quiz_id = ?", (quiz_id,))
         await conn.execute("DELETE FROM quizzes WHERE id = ?", (quiz_id,))
         await conn.commit()
 
@@ -180,10 +206,20 @@ async def get_quiz(quiz_id: int):
     return await _fetchone("SELECT * FROM quizzes WHERE id = ?", (quiz_id,))
 
 
-async def list_quizzes(limit: int = 20):
+async def list_quizzes(limit: int = 20, mode: str = "manual"):
     return await _fetchall(
         "SELECT q.*, (SELECT COUNT(*) FROM answers a WHERE a.quiz_id = q.id) AS cnt "
-        "FROM quizzes q ORDER BY q.id DESC LIMIT ?",
+        "FROM quizzes q WHERE q.mode = ? ORDER BY q.id DESC LIMIT ?",
+        (mode, limit),
+    )
+
+
+async def list_qa_quizzes(limit: int = 100):
+    return await _fetchall(
+        "SELECT q.*, "
+        "(SELECT COUNT(DISTINCT user_id) FROM attempts t WHERE t.quiz_id = q.id) AS users, "
+        "(SELECT COUNT(DISTINCT user_id) FROM attempts t WHERE t.quiz_id = q.id AND t.is_correct) AS solved "
+        "FROM quizzes q WHERE q.mode = 'auto' ORDER BY q.id DESC LIMIT ?",
         (limit,),
     )
 
@@ -248,3 +284,61 @@ async def get_answer(answer_id: int):
 
 async def delete_answer(answer_id: int) -> None:
     await _execute("DELETE FROM answers WHERE id = ?", (answer_id,))
+
+
+# --- Savol-javob urinishlari ---
+
+async def user_attempt_state(quiz_id: int, user_id: int) -> tuple[int, bool]:
+    """(urinishlar soni, to'g'ri topganmi)."""
+    row = await _fetchone(
+        "SELECT COUNT(*) AS n, COALESCE(MAX(is_correct), 0) AS ok FROM attempts "
+        "WHERE quiz_id = ? AND user_id = ?",
+        (quiz_id, user_id),
+    )
+    return row["n"], bool(row["ok"])
+
+
+async def add_attempt(quiz_id: int, user_id: int, username: str | None, full_name: str,
+                      text: str, is_correct: bool, received_at: str, update_id: int | None,
+                      max_attempts: int) -> str:
+    """Urinishni limit doirasida atomar saqlaydi.
+
+    Qaytaradi: 'saved', 'limit' (urinish tugagan) yoki 'solved' (oldin topgan).
+    """
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute(
+            "SELECT COUNT(*), COALESCE(MAX(is_correct), 0) FROM attempts WHERE quiz_id = ? AND user_id = ?",
+            (quiz_id, user_id),
+        )
+        used, solved = await cur.fetchone()
+        if solved:
+            await conn.rollback()
+            return "solved"
+        if used >= max_attempts:
+            await conn.rollback()
+            return "limit"
+        await conn.execute(
+            "INSERT INTO attempts (quiz_id, user_id, username, full_name, text, is_correct, received_at, update_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (quiz_id, user_id, username, full_name, text, int(is_correct), received_at, update_id),
+        )
+        await conn.commit()
+        return "saved"
+
+
+async def list_attempts(quiz_id: int):
+    return await _fetchall(
+        "SELECT * FROM attempts WHERE quiz_id = ? "
+        "ORDER BY update_id IS NULL, update_id, received_at, id",
+        (quiz_id,),
+    )
+
+
+async def get_attempt(attempt_id: int):
+    return await _fetchone("SELECT * FROM attempts WHERE id = ?", (attempt_id,))
+
+
+async def delete_user_attempts(quiz_id: int, user_id: int) -> None:
+    """Foydalanuvchi urinishlarini o'chirish — u qaytadan javob bera oladi."""
+    await _execute("DELETE FROM attempts WHERE quiz_id = ? AND user_id = ?", (quiz_id, user_id))

@@ -13,6 +13,7 @@ from openpyxl import Workbook
 from starlette.middleware.sessions import SessionMiddleware
 
 import db
+import matcher
 import services
 import texts
 from config import PANEL_PASSWORD, PANEL_SECURE, PANEL_USER, SECRET_KEY
@@ -143,6 +144,8 @@ async def _quiz_or_404(quiz_id: int):
 @app.get("/quiz/{quiz_id}", response_class=HTMLResponse, dependencies=[Depends(auth)])
 async def quiz_page(request: Request, quiz_id: int):
     quiz = await _quiz_or_404(quiz_id)
+    if quiz["mode"] == "auto":
+        return back(f"/qa/{quiz_id}")
     winner = await db.get_answer(quiz["winner_answer_id"]) if quiz["winner_answer_id"] else None
     return render(request, "quiz.html", quiz=quiz, winner=winner,
                   answers=await db.list_answers(quiz_id))
@@ -183,9 +186,10 @@ async def quiz_reopen(request: Request, quiz_id: int, bot: Bot = Depends(get_bot
 @app.post("/quiz/{quiz_id}/delete", dependencies=[Depends(auth)])
 async def quiz_delete(request: Request, quiz_id: int, from_channel: str | None = Form(None),
                       bot: Bot = Depends(get_bot)):
+    quiz = await _quiz_or_404(quiz_id)
     await services.delete(bot, quiz_id, from_channel=bool(from_channel))
     flash(request, f"Viktorina #{quiz_id} o'chirildi")
-    return back("/")
+    return back("/qa" if quiz["mode"] == "auto" else "/")
 
 
 @app.post("/answer/{answer_id}/win", dependencies=[Depends(auth)])
@@ -223,6 +227,131 @@ async def quiz_export(quiz_id: int):
     return StreamingResponse(
         buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="viktorina_{quiz_id}.xlsx"'},
+    )
+
+
+# --- Savol-javob (avtomatik tekshiruv) ---
+
+MAX_ATTEMPTS = 10
+
+
+def _attempts_arg(value: int) -> int:
+    return max(1, min(MAX_ATTEMPTS, value))
+
+
+def _qa_summary(attempts) -> list[dict]:
+    """Foydalanuvchilar kesimida: urinishlar, to'g'ri topganmi, birinchi to'g'ri javob tartibi."""
+    users: dict[int, dict] = {}
+    for t in attempts:
+        u = users.setdefault(t["user_id"], {
+            "user_id": t["user_id"], "full_name": t["full_name"], "username": t["username"],
+            "tries": [], "solved_at": None,
+        })
+        u["tries"].append(t)
+        if t["is_correct"] and u["solved_at"] is None:
+            u["solved_at"] = t["received_at"]
+            u["solved_order"] = sum(1 for x in users.values() if x["solved_at"])
+    return sorted(users.values(), key=lambda u: (u["solved_at"] is None, u.get("solved_order", 0)))
+
+
+@app.get("/qa", response_class=HTMLResponse, dependencies=[Depends(auth)])
+async def qa_list(request: Request):
+    return render(request, "qa_list.html", quizzes=await db.list_qa_quizzes(),
+                  channels=await db.list_channels(), max_attempts=MAX_ATTEMPTS)
+
+
+@app.post("/qa/new", dependencies=[Depends(auth)])
+async def qa_new(request: Request, channel_id: int = Form(...), text: str = Form(...),
+                 answers: str = Form(...), max_attempts: int = Form(3),
+                 photo: UploadFile | None = File(None), bot: Bot = Depends(get_bot)):
+    if not matcher.variants(answers):
+        flash(request, "Kamida bitta to'g'ri javob kiriting", "err")
+        return back("/qa")
+    channel = await db.get_channel(channel_id)
+    if channel is None:
+        flash(request, "Kanal topilmadi", "err")
+        return back("/qa")
+    data = await photo.read() if photo and photo.filename else None
+    try:
+        quiz_id = await services.publish_text(
+            bot, channel["chat_id"], text.strip(), data, photo.filename if data else "photo.jpg",
+            mode="auto", correct_answers="\n".join(matcher.variants(answers)),
+            max_attempts=_attempts_arg(max_attempts),
+        )
+    except Exception as e:
+        flash(request, f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring.", "err")
+        return back("/qa")
+    flash(request, f"Savol #{quiz_id} kanalga joylandi")
+    return back(f"/qa/{quiz_id}")
+
+
+async def _qa_or_404(quiz_id: int):
+    quiz = await _quiz_or_404(quiz_id)
+    if quiz["mode"] != "auto":
+        raise HTTPException(404, "Savol-javob topilmadi")
+    return quiz
+
+
+@app.get("/qa/{quiz_id}", response_class=HTMLResponse, dependencies=[Depends(auth)])
+async def qa_page(request: Request, quiz_id: int):
+    quiz = await _qa_or_404(quiz_id)
+    attempts = await db.list_attempts(quiz_id)
+    return render(request, "qa_quiz.html", quiz=quiz, attempts=attempts, users=_qa_summary(attempts),
+                  max_attempts=MAX_ATTEMPTS, test=request.session.pop("qa_test", None))
+
+
+@app.get("/qa/{quiz_id}/rows", response_class=HTMLResponse, dependencies=[Depends(auth)])
+async def qa_rows(request: Request, quiz_id: int):
+    quiz = await _qa_or_404(quiz_id)
+    attempts = await db.list_attempts(quiz_id)
+    return templates.TemplateResponse(request, "_qa_rows.html",
+                                      {"quiz": quiz, "users": _qa_summary(attempts)})
+
+
+@app.post("/qa/{quiz_id}/answers", dependencies=[Depends(auth)])
+async def qa_answers(request: Request, quiz_id: int, answers: str = Form(...), max_attempts: int = Form(...)):
+    await _qa_or_404(quiz_id)
+    if not matcher.variants(answers):
+        flash(request, "Kamida bitta to'g'ri javob kiriting", "err")
+        return back(f"/qa/{quiz_id}")
+    await db.update_quiz_answers(quiz_id, "\n".join(matcher.variants(answers)), _attempts_arg(max_attempts))
+    flash(request, "To'g'ri javoblar va urinishlar soni saqlandi (keyingi javoblarga qo'llanadi)")
+    return back(f"/qa/{quiz_id}")
+
+
+@app.post("/qa/{quiz_id}/test", dependencies=[Depends(auth)])
+async def qa_test(request: Request, quiz_id: int, sample: str = Form(...)):
+    quiz = await _qa_or_404(quiz_id)
+    request.session["qa_test"] = [sample, matcher.is_correct(sample, quiz["correct_answers"])]
+    return back(f"/qa/{quiz_id}")
+
+
+@app.post("/qa/{quiz_id}/reset/{user_id}", dependencies=[Depends(auth)])
+async def qa_reset_user(request: Request, quiz_id: int, user_id: int):
+    await db.delete_user_attempts(quiz_id, user_id)
+    flash(request, "Foydalanuvchi urinishlari o'chirildi — u qaytadan javob bera oladi")
+    return back(f"/qa/{quiz_id}")
+
+
+@app.get("/qa/{quiz_id}/export", dependencies=[Depends(auth)])
+async def qa_export(quiz_id: int):
+    await _qa_or_404(quiz_id)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"Savol {quiz_id}"
+    ws.append(["№", "Vaqt", "Ism", "Username", "User ID", "Javob", "Natija"])
+    for i, t in enumerate(await db.list_attempts(quiz_id), start=1):
+        ws.append([i, fmt_time(t["received_at"]), t["full_name"],
+                   f"@{t['username']}" if t["username"] else "", t["user_id"], t["text"],
+                   "To'g'ri" if t["is_correct"] else "Noto'g'ri"])
+    for col, width in zip("ABCDEFG", (5, 24, 25, 18, 14, 50, 12)):
+        ws.column_dimensions[col].width = width
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="savol_javob_{quiz_id}.xlsx"'},
     )
 
 

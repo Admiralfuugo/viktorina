@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Savol-javob #{{ quiz.id }}{% endblock %}
+{% block content %}
+<div class="row" style="justify-content:space-between;margin-bottom:16px">
+  <h1 style="margin:0">Savol-javob #{{ quiz.id }}
+    <span class="badge {{ quiz.status }}">{{ 'faol' if quiz.status == 'active' else 'yopilgan' }}</span></h1>
+  <a href="/qa" class="btn ghost">← Orqaga</a>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Savol</h2>
+    <form method="post" action="/quiz/{{ quiz.id }}/edit">
+      <textarea name="text" required>{{ quiz.title }}</textarea>
+      <div style="margin-top:10px"><button type="submit" class="sm">Saqlash (kanalda ham o'zgaradi)</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <h2>To'g'ri javoblar</h2>
+    <form method="post" action="/qa/{{ quiz.id }}/answers">
+      <textarea name="answers" required>{{ quiz.correct_answers }}</textarea>
+      <div class="hint">Har bir variant alohida qatorda.</div>
+      <label>Urinishlar soni</label>
+      <select name="max_attempts">
+        {% for n in range(1, max_attempts + 1) %}<option value="{{ n }}" {{ 'selected' if n == quiz.max_attempts }}>{{ n }}</option>{% endfor %}
+      </select>
+      <div style="margin-top:10px"><button type="submit" class="sm">Saqlash</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>🧪 Javobni sinab ko'rish</h2>
+    <p class="hint">Foydalanuvchi yozishi mumkin bo'lgan variantni kiriting — bot uni qanday baholashini ko'rasiz.</p>
+    <form method="post" action="/qa/{{ quiz.id }}/test" class="row">
+      <input type="text" name="sample" required style="flex:1" value="{{ test[0] if test }}">
+      <button type="submit" class="sm">Tekshirish</button>
+    </form>
+    {% if test %}
+      <div class="flash {{ 'ok' if test[1] else 'err' }}" style="margin:12px 0 0">
+        «{{ test[0] }}» — {{ "✅ to'g'ri deb qabul qilinadi" if test[1] else "❌ noto'g'ri deb hisoblanadi" }}</div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>Boshqaruv</h2>
+    <div class="row">
+      {% if quiz.status == 'active' %}
+        <form class="inline" method="post" action="/quiz/{{ quiz.id }}/close"
+              onsubmit="return confirm('Savol yopilsinmi? Javob qabul qilinmay qoladi.')"><button class="ghost">🔒 Yopish</button></form>
+      {% else %}
+        <form class="inline" method="post" action="/quiz/{{ quiz.id }}/reopen"><button class="ghost">🔓 Qayta ochish</button></form>
+      {% endif %}
+      <a class="btn ghost" href="/qa/{{ quiz.id }}/export">📥 Excelga yuklash</a>
+    </div>
+    <form method="post" action="/quiz/{{ quiz.id }}/delete" style="margin-top:16px"
+          onsubmit="return confirm('Savol va barcha javoblar o\'chirilsinmi?')">
+      <label style="font-weight:400"><input type="checkbox" name="from_channel" value="1" checked> Kanal postini ham o'chirish</label>
+      <button class="danger sm" style="margin-top:6px">🗑 O'chirish</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <h2 style="margin:0">Qatnashchilar <span class="hint">— avval to'g'ri topganlar, topish tartibida</span></h2>
+    <span class="muted">● har 5 soniyada yangilanadi</span>
+  </div>
+  <div class="table-scroll"><table>
+    <thead><tr><th>№</th><th>Foydalanuvchi</th><th>Natija</th><th>Urinishlar</th><th></th></tr></thead>
+    <tbody id="rows">{% include "_qa_rows.html" %}</tbody>
+  </table></div>
+</div>
+
+<script>
+  setInterval(async () => {
+    try {
+      const r = await fetch("/qa/{{ quiz.id }}/rows", {cache: "no-store"});
+      if (r.redirected) { location.href = r.url; return; }
+      if (r.ok) document.getElementById("rows").innerHTML = await r.text();
+    } catch (e) {}
+  }, 5000);
+</script>
+{% endblock %}

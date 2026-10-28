@@ -12,6 +12,15 @@ DEFAULTS: dict[str, tuple[str, str]] = {
     "text_only": ("Matn bo'lmagan xabar", "Iltimos, javobni matn ko'rinishida yuboring."),
     "winner": ("G'olibga tabrik", "🎉 Tabriklaymiz! Siz javobni birinchi bo'lib topdingiz va viktorina g'olibiga aylandingiz!"),
     "button": ("Kanaldagi tugma", "✍️ Javob berish"),
+    # Savol-javob (avtomatik tekshiruv)
+    "qa_ask": ("Savol-javob: javob so'rash ({title} — savol, {left} — qolgan urinish)",
+               "<b>{title}</b>\n\nJavobingizni yozing. Urinishlar soni: {left}"),
+    "qa_correct": ("Savol-javob: to'g'ri javob", "✅ To'g'ri javob topdingiz!"),
+    "qa_wrong": ("Savol-javob: noto'g'ri, urinish qoldi ({left} — qolgan)",
+                 "❌ Noto'g'ri javob. Yana urinib ko'ring. Qolgan urinishlar: {left}"),
+    "qa_wrong_last": ("Savol-javob: noto'g'ri, urinish tugadi", "❌ Noto'g'ri javob. Urinishlaringiz tugadi."),
+    "qa_solved": ("Savol-javob: oldin topgan", "Siz bu savolga allaqachon to'g'ri javob bergansiz ✅"),
+    "qa_limit": ("Savol-javob: urinish tugagan", "Bu savol uchun urinishlaringiz tugagan."),
 }
 
 

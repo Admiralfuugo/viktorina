@@ -1,0 +1,24 @@
+{% for u in users %}
+<tr class="{{ 'win' if u.solved_order == 1 }}">
+  <td><b>{{ u.solved_order if u.solved_at else '—' }}</b></td>
+  <td>{{ u.full_name }}<br><span class="muted">{% if u.username %}@{{ u.username }}{% else %}id{{ u.user_id }}{% endif %}</span></td>
+  <td style="white-space:nowrap">
+    {% if u.solved_at %}<span class="badge active">✅ topdi</span>
+      <div class="mono muted">{{ u.solved_at|t }}</div>
+    {% elif u.tries|length >= quiz.max_attempts %}<span class="badge closed">❌ urinish tugadi</span>
+    {% else %}<span class="badge closed">⏳ {{ u.tries|length }}/{{ quiz.max_attempts }}</span>{% endif %}
+  </td>
+  <td>
+    {% for t in u.tries %}
+      <div>{{ '✅' if t.is_correct else '❌' }} {{ t.text }} <span class="mono muted">{{ t.received_at|t }}</span></div>
+    {% endfor %}
+  </td>
+  <td>
+    <form class="inline" method="post" action="/qa/{{ quiz.id }}/reset/{{ u.user_id }}"
+          onsubmit="return confirm('Bu foydalanuvchining urinishlari o\'chirilsinmi? U qaytadan javob bera oladi.')">
+      <button class="ghost sm" title="Urinishlarni tozalash">↺</button></form>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">Hali javob yo'q.</td></tr>
+{% endfor %}
