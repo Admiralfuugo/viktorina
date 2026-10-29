@@ -209,8 +209,13 @@ async def reveal(call: CallbackQuery, bot: Bot):
     await call.answer()
 
 
-@router.message(AnswerState.waiting)
+@router.message(F.chat.type == "private", ~F.text)
 async def receive_non_text(message: Message):
+    # Faqat matn qabul qilinadi: fayl, rasm, video, audio, stiker va h.k. o'chiriladi
+    try:
+        await message.delete()
+    except Exception:
+        pass
     await message.answer(await texts.get("text_only"))
 
 
