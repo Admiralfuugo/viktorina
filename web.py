@@ -16,6 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import db
 import matcher
 import services
+import stats
 import texts
 from config import PANEL_PASSWORD, PANEL_SECURE, PANEL_USER, SECRET_KEY
 
@@ -169,6 +170,11 @@ def _publish_error(chat_id: str, e: Exception) -> str:
 
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(auth)])
+async def home(request: Request):
+    return render(request, "home.html", s=await stats.build())
+
+
+@app.get("/quizzes", response_class=HTMLResponse, dependencies=[Depends(auth)])
 async def dashboard(request: Request, bot: Bot = Depends(get_bot)):
     return render(request, "dashboard.html", quizzes=await db.list_quizzes(100),
                   channels=await db.list_channels(), bot_username=(await bot.me()).username)
@@ -181,7 +187,7 @@ async def quiz_new(request: Request, channel_id: int = Form(...), text: str = Fo
     chat_id = await _target_chat(channel_id)
     if chat_id is None:
         flash(request, "Kanal topilmadi", "err")
-        return back("/")
+        return back("/quizzes")
     data = await photo.read() if photo and photo.filename else None
     try:
         quiz_id = await services.publish_text(bot, chat_id, text.strip(), data,
@@ -189,7 +195,7 @@ async def quiz_new(request: Request, channel_id: int = Form(...), text: str = Fo
                                               reveal_text=reveal_text.strip())
     except Exception as e:
         flash(request, _publish_error(chat_id, e), "err")
-        return back("/")
+        return back("/quizzes")
     flash(request, _published_note(chat_id, quiz_id, "Viktorina"))
     return back(f"/quiz/{quiz_id}")
 
@@ -274,7 +280,7 @@ async def quiz_delete(request: Request, quiz_id: int, from_channel: str | None =
     quiz = await _quiz_or_404(quiz_id)
     await services.delete(bot, quiz_id, from_channel=bool(from_channel))
     flash(request, f"Viktorina #{quiz_id} o'chirildi")
-    return back("/qa" if quiz["mode"] == "auto" else "/")
+    return back("/qa" if quiz["mode"] == "auto" else "/quizzes")
 
 
 @app.post("/answer/{answer_id}/win", dependencies=[Depends(auth)])
@@ -282,7 +288,7 @@ async def answer_win(request: Request, answer_id: int, bot: Bot = Depends(get_bo
     answer = await db.get_answer(answer_id)
     ok, note = await services.choose_winner(bot, answer_id)
     flash(request, ("G'olib tanlandi. " if ok else "") + note, "ok" if ok else "err")
-    return back(f"/quiz/{answer['quiz_id']}" if answer else "/")
+    return back(f"/quiz/{answer['quiz_id']}" if answer else "/quizzes")
 
 
 @app.post("/answer/{answer_id}/delete", dependencies=[Depends(auth)])
@@ -290,7 +296,7 @@ async def answer_delete(request: Request, answer_id: int):
     answer = await db.get_answer(answer_id)
     await db.delete_answer(answer_id)
     flash(request, "Javob o'chirildi (foydalanuvchi qayta javob bera oladi)")
-    return back(f"/quiz/{answer['quiz_id']}" if answer else "/")
+    return back(f"/quiz/{answer['quiz_id']}" if answer else "/quizzes")
 
 
 @app.get("/quiz/{quiz_id}/export", dependencies=[Depends(auth)])

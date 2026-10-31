@@ -4,7 +4,7 @@
 <div class="row" style="justify-content:space-between;margin-bottom:16px">
   <h1 style="margin:0">Viktorina #{{ quiz.id }}
     <span class="badge {{ quiz.status }}">{{ 'faol' if quiz.status == 'active' else 'yopilgan' }}</span></h1>
-  <a href="/" class="btn ghost">← Orqaga</a>
+  <a href="/quizzes" class="btn ghost">← Orqaga</a>
 </div>
 
 {% if winner %}

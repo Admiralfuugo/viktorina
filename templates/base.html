@@ -136,7 +136,8 @@
   </span>
   {% if authed %}
   {% set p = request.url.path %}
-  <a href="/" class="{{ 'on' if p == '/' or p.startswith('/quiz') }}">Viktorinalar</a>
+  <a href="/" class="{{ 'on' if p == '/' }}">Bosh sahifa</a>
+  <a href="/quizzes" class="{{ 'on' if p.startswith('/quiz') }}">Viktorinalar</a>
   <a href="/qa" class="{{ 'on' if p.startswith('/qa') }}">Savol-javob</a>
   <a href="/texts" class="{{ 'on' if p == '/texts' }}">Bot matnlari</a>
   <a href="/admins" class="{{ 'on' if p == '/admins' }}">Adminlar</a>
