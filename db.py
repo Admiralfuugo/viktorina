@@ -77,6 +77,8 @@ MIGRATIONS = [
     "ALTER TABLE channels ADD COLUMN required INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE channels ADD COLUMN link TEXT",
     "ALTER TABLE admins ADD COLUMN username TEXT",
+    # Joriy rasm (panelda ko'rsatish va almashtirish uchun)
+    "ALTER TABLE quizzes ADD COLUMN photo_file_id TEXT",
 ]
 
 
@@ -249,6 +251,10 @@ async def set_channel_message(quiz_id: int, message_id: int) -> None:
 
 async def update_quiz_title(quiz_id: int, title: str) -> None:
     await _execute("UPDATE quizzes SET title = ? WHERE id = ?", (title, quiz_id))
+
+
+async def set_quiz_photo(quiz_id: int, file_id: str) -> None:
+    await _execute("UPDATE quizzes SET photo_file_id = ? WHERE id = ?", (file_id, quiz_id))
 
 
 async def delete_quiz(quiz_id: int) -> None:

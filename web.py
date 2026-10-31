@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from openpyxl import Workbook
 from starlette.middleware.sessions import SessionMiddleware
@@ -219,15 +219,31 @@ async def quiz_rows(request: Request, quiz_id: int):
 
 
 @app.post("/quiz/{quiz_id}/edit", dependencies=[Depends(auth)])
-async def quiz_edit(request: Request, quiz_id: int, text: str = Form(...), bot: Bot = Depends(get_bot)):
+async def quiz_edit(request: Request, quiz_id: int, text: str = Form(...),
+                    photo: UploadFile | None = File(None), bot: Bot = Depends(get_bot)):
     quiz = await _quiz_or_404(quiz_id)
+    data = await photo.read() if photo and photo.filename else None
     try:
-        await services.edit_quiz_text(bot, quiz_id, text.strip())
-        flash(request, "Savol yangilandi (botdagi xabarlarda ham)"
-              if quiz["channel_chat_id"] == services.BOT_TARGET else "Savol yangilandi (kanalda ham)")
+        await services.edit_quiz_text(bot, quiz_id, text.strip(), data,
+                                      photo.filename if data else "photo.jpg")
+        what = "Savol va rasm yangilandi" if data else "Savol yangilandi"
+        flash(request, f"{what} (botdagi xabarlarda ham)"
+              if quiz["channel_chat_id"] == services.BOT_TARGET else f"{what} (kanalda ham)")
     except Exception as e:
         flash(request, f"Tahrirlab bo'lmadi: {e}", "err")
     return back(f"/quiz/{quiz_id}")
+
+
+@app.get("/quiz/{quiz_id}/photo", dependencies=[Depends(auth)])
+async def quiz_photo(quiz_id: int, bot: Bot = Depends(get_bot)):
+    quiz = await _quiz_or_404(quiz_id)
+    try:
+        data = await services.quiz_photo(bot, quiz)
+    except Exception:
+        data = None
+    if not data:
+        raise HTTPException(404, "Rasm topilmadi")
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
 @app.post("/quiz/{quiz_id}/reveal", dependencies=[Depends(auth)])

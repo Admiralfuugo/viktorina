@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import BufferedInputFile, InputMediaPhoto, Message
 
 import db
 import keyboards as kb
@@ -49,6 +49,8 @@ async def _publish_to_admins(bot: Bot, quiz_id: int, text: str, photo: bytes | N
         return await bot.send_message(user_id, text, reply_markup=markup)
 
     await _send_to_admins(quiz_id, send)
+    if isinstance(media, str):
+        await db.set_quiz_photo(quiz_id, media)
 
 
 async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = None,
@@ -77,6 +79,8 @@ async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = 
         await db.delete_quiz(quiz_id)
         raise
     await db.set_channel_message(quiz_id, sent.message_id)
+    if photo:
+        await db.set_quiz_photo(quiz_id, sent.photo[-1].file_id)
     return quiz_id
 
 
@@ -84,6 +88,8 @@ async def publish_copy(bot: Bot, chat_id: str, message: Message) -> int:
     """Botdagi xabarni kanalga nusxalash (bot ichidagi /new)."""
     text = message.text or message.caption or ""
     quiz_id = await db.create_quiz(text, chat_id, has_photo=bool(message.photo))
+    if message.photo:
+        await db.set_quiz_photo(quiz_id, message.photo[-1].file_id)
     if chat_id == BOT_TARGET:
         markup = await _markup(bot, quiz_id)
         try:
@@ -111,12 +117,25 @@ async def _posts(quiz) -> list[tuple[int | str, int, bool]]:
     return posts
 
 
-async def edit_quiz_text(bot: Bot, quiz_id: int, text: str) -> None:
+async def edit_quiz_text(bot: Bot, quiz_id: int, text: str, photo: bytes | None = None,
+                         photo_name: str = "photo.jpg") -> None:
+    """Savol matnini (va rasmli postda — rasmni) hamma joyda yangilaydi."""
     quiz = await db.get_quiz(quiz_id)
+    if photo and not quiz["has_photo"]:
+        # Telegram matnli xabarni rasmliga aylantirishga ruxsat bermaydi
+        raise ValueError("matnli postga rasm qo'shib bo'lmaydi — faqat rasmli postda rasm almashtiriladi")
     markup = await _markup(bot, quiz_id) if quiz["status"] == "active" else None
+    media = BufferedInputFile(photo, photo_name) if photo else None
     for chat, message_id, is_channel in await _posts(quiz):
         try:
-            if quiz["has_photo"]:
+            if media:
+                sent = await bot.edit_message_media(
+                    InputMediaPhoto(media=media, caption=text), chat_id=chat, message_id=message_id,
+                    reply_markup=markup,
+                )
+                if isinstance(sent, Message) and sent.photo:
+                    media = sent.photo[-1].file_id  # rasm bir marta yuklanadi
+            elif quiz["has_photo"]:
                 await bot.edit_message_caption(chat_id=chat, message_id=message_id,
                                                caption=text, reply_markup=markup)
             else:
@@ -133,6 +152,17 @@ async def edit_quiz_text(bot: Bot, quiz_id: int, text: str) -> None:
                 raise
             logging.warning("Admin nusxasini tahrirlab bo'lmadi (%s): %s", chat, e)
     await db.update_quiz_title(quiz_id, text)
+    if isinstance(media, str):
+        await db.set_quiz_photo(quiz_id, media)
+
+
+async def quiz_photo(bot: Bot, quiz) -> bytes | None:
+    """Panelda ko'rsatish uchun joriy rasmni Telegram'dan yuklab oladi."""
+    if not quiz["photo_file_id"]:
+        return None
+    file = await bot.get_file(quiz["photo_file_id"])
+    buf = await bot.download_file(file.file_path)
+    return buf.read()
 
 
 async def _set_button(bot: Bot, quiz, show: bool) -> None:

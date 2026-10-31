@@ -10,8 +10,18 @@
 <div class="grid">
   <div class="card">
     <h2>Savol</h2>
-    <form method="post" action="/quiz/{{ quiz.id }}/edit">
+    <form method="post" action="/quiz/{{ quiz.id }}/edit" enctype="multipart/form-data">
       <textarea name="text" required>{{ quiz.title }}</textarea>
+      {% if quiz.has_photo %}
+        {% if quiz.photo_file_id %}
+        <img src="/quiz/{{ quiz.id }}/photo?v={{ quiz.photo_file_id[-12:] }}" alt="Joriy rasm"
+             style="display:block;max-width:100%;max-height:240px;border-radius:10px;margin-top:10px">
+        {% endif %}
+        <label>Rasmni almashtirish <span class="hint">(ixtiyoriy) — tanlamasangiz eski rasm qoladi</span></label>
+        <input type="file" name="photo" accept="image/*">
+      {% else %}
+        <p class="hint">Bu post rasmsiz joylangan — Telegram matnli postga keyin rasm qo'shishga ruxsat bermaydi.</p>
+      {% endif %}
       <div style="margin-top:10px"><button type="submit" class="sm">Saqlash (kanal / botdagi postda ham o'zgaradi)</button></div>
     </form>
   </div>
