@@ -10,6 +10,7 @@ import db
 import web
 from config import ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, PANEL_HOST, PANEL_PORT
 from handlers import admin, user
+from middlewares import RememberUser
 
 
 async def main():
@@ -17,6 +18,7 @@ async def main():
     await db.init_db(ADMIN_IDS, CHANNEL_ID)
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
+    dp.update.outer_middleware(RememberUser())
     dp.include_routers(admin.router, user.router)
 
     web.app.state.bot = bot

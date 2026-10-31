@@ -460,17 +460,33 @@ async def texts_reset(request: Request, key: str):
 # --- Adminlar ---
 
 @app.get("/admins", response_class=HTMLResponse, dependencies=[Depends(auth)])
-async def admins_page(request: Request):
-    return render(request, "admins.html", admins=await db.list_admins())
+async def admins_page(request: Request, bot: Bot = Depends(get_bot)):
+    return render(request, "admins.html", admins=await db.list_admins(),
+                  bot_username=(await bot.me()).username)
 
 
 @app.post("/admins/add", dependencies=[Depends(auth)])
-async def admins_add(request: Request, user_id: str = Form(...), name: str = Form("")):
-    if not user_id.strip().isdigit():
-        flash(request, "Telegram ID faqat raqamlardan iborat bo'lishi kerak", "err")
+async def admins_add(request: Request, user_id: str = Form(...), name: str = Form(""),
+                     bot: Bot = Depends(get_bot)):
+    # Telegram ID yoki @username (username bot eslab qolgan foydalanuvchilardan qidiriladi)
+    value = user_id.strip().replace("https://t.me/", "").replace("t.me/", "")
+    name = name.strip()
+    if value.isdigit():
+        await db.add_admin(int(value), name)
+        flash(request, "Admin qo'shildi")
         return back("/admins")
-    await db.add_admin(int(user_id), name.strip())
-    flash(request, "Admin qo'shildi")
+    username = value.lstrip("@")
+    if not username or not username.replace("_", "").isalnum():
+        flash(request, "Telegram ID (raqam) yoki @username kiriting", "err")
+        return back("/admins")
+    found = await db.find_user_by_username(username)
+    if found is None:
+        me = (await bot.me()).username
+        flash(request, f"@{username} topilmadi. U avval @{me} botiga /start bosishi kerak, "
+                       "so'ng qayta qo'shib ko'ring.", "err")
+        return back("/admins")
+    await db.add_admin(found["user_id"], name or found["full_name"] or "", found["username"])
+    flash(request, f"Admin qo'shildi: @{found['username']} (ID {found['user_id']})")
     return back("/admins")
 
 
