@@ -223,9 +223,8 @@ async def quiz_edit(request: Request, quiz_id: int, text: str = Form(...), bot: 
     quiz = await _quiz_or_404(quiz_id)
     try:
         await services.edit_quiz_text(bot, quiz_id, text.strip())
-        # Botga joylanganda kanaldagi ulashilgan nusxalarni bot tahrirlay olmaydi
-        flash(request, "Savol yangilandi" if quiz["channel_chat_id"] == services.BOT_TARGET
-              else "Savol yangilandi (kanalda ham)")
+        flash(request, "Savol yangilandi (botdagi xabarlarda ham)"
+              if quiz["channel_chat_id"] == services.BOT_TARGET else "Savol yangilandi (kanalda ham)")
     except Exception as e:
         flash(request, f"Tahrirlab bo'lmadi: {e}", "err")
     return back(f"/quiz/{quiz_id}")

@@ -1,5 +1,8 @@
 """Bot va panel uchun umumiy amallar."""
+import logging
+
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, Message
 
 import db
@@ -19,15 +22,16 @@ async def _markup(bot: Bot, quiz_id: int):
     return kb.channel_kb(me.username, quiz_id, await texts.get("button"))
 
 
-async def _send_to_admins(send) -> None:
-    """Postni har bir adminga yuboradi; hech kimga yetmasa exception."""
+async def _send_to_admins(quiz_id: int, send) -> None:
+    """Postni har bir adminga yuboradi va nusxalarni eslab qoladi; hech kimga yetmasa exception."""
     delivered = 0
     for admin in await db.list_admins():
         try:
-            await send(admin["user_id"])
-            delivered += 1
+            sent = await send(admin["user_id"])
         except Exception:
-            pass  # admin botni /start qilmagan yoki bloklagan
+            continue  # admin botni /start qilmagan yoki bloklagan
+        await db.add_quiz_message(quiz_id, admin["user_id"], sent.message_id)
+        delivered += 1
     if not delivered:
         raise RuntimeError("hech bir adminga yuborib bo'lmadi (adminlar botga /start bosganini tekshiring)")
 
@@ -41,10 +45,10 @@ async def _publish_to_admins(bot: Bot, quiz_id: int, text: str, photo: bytes | N
         if media:
             sent = await bot.send_photo(user_id, media, caption=text, reply_markup=markup)
             media = sent.photo[-1].file_id  # rasm bir marta yuklanadi
-        else:
-            await bot.send_message(user_id, text, reply_markup=markup)
+            return sent
+        return await bot.send_message(user_id, text, reply_markup=markup)
 
-    await _send_to_admins(send)
+    await _send_to_admins(quiz_id, send)
 
 
 async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = None,
@@ -83,7 +87,7 @@ async def publish_copy(bot: Bot, chat_id: str, message: Message) -> int:
     if chat_id == BOT_TARGET:
         markup = await _markup(bot, quiz_id)
         try:
-            await _send_to_admins(lambda user_id: message.copy_to(user_id, reply_markup=markup))
+            await _send_to_admins(quiz_id, lambda user_id: message.copy_to(user_id, reply_markup=markup))
         except Exception:
             await db.delete_quiz(quiz_id)
             raise
@@ -97,30 +101,47 @@ async def publish_copy(bot: Bot, chat_id: str, message: Message) -> int:
     return quiz_id
 
 
+async def _posts(quiz) -> list[tuple[int | str, int, bool]]:
+    """Viktorinaning bot yuborgan barcha xabarlari: (chat, message_id, kanal postimi)."""
+    posts = []
+    if quiz["channel_message_id"] and quiz["channel_chat_id"]:
+        posts.append((chat_ref(quiz["channel_chat_id"]), quiz["channel_message_id"], True))
+    for m in await db.list_quiz_messages(quiz["id"]):
+        posts.append((chat_ref(m["chat_id"]), m["message_id"], False))
+    return posts
+
+
 async def edit_quiz_text(bot: Bot, quiz_id: int, text: str) -> None:
     quiz = await db.get_quiz(quiz_id)
-    if quiz["channel_message_id"]:
-        markup = await _markup(bot, quiz_id) if quiz["status"] == "active" else None
-        chat = chat_ref(quiz["channel_chat_id"])
-        if quiz["has_photo"]:
-            await bot.edit_message_caption(chat_id=chat, message_id=quiz["channel_message_id"],
-                                           caption=text, reply_markup=markup)
-        else:
-            await bot.edit_message_text(text, chat_id=chat, message_id=quiz["channel_message_id"],
-                                        reply_markup=markup)
+    markup = await _markup(bot, quiz_id) if quiz["status"] == "active" else None
+    for chat, message_id, is_channel in await _posts(quiz):
+        try:
+            if quiz["has_photo"]:
+                await bot.edit_message_caption(chat_id=chat, message_id=message_id,
+                                               caption=text, reply_markup=markup)
+            else:
+                await bot.edit_message_text(text, chat_id=chat, message_id=message_id,
+                                            reply_markup=markup)
+        except TelegramBadRequest as e:
+            if "not modified" in str(e):
+                continue
+            if is_channel:
+                raise
+            logging.warning("Admin nusxasini tahrirlab bo'lmadi (%s): %s", chat, e)
+        except Exception as e:
+            if is_channel:
+                raise
+            logging.warning("Admin nusxasini tahrirlab bo'lmadi (%s): %s", chat, e)
     await db.update_quiz_title(quiz_id, text)
 
 
 async def _set_button(bot: Bot, quiz, show: bool) -> None:
-    if not quiz["channel_message_id"] or not quiz["channel_chat_id"]:
-        return
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=chat_ref(quiz["channel_chat_id"]), message_id=quiz["channel_message_id"],
-            reply_markup=await _markup(bot, quiz["id"]) if show else None,
-        )
-    except Exception:
-        pass
+    markup = await _markup(bot, quiz["id"]) if show else None
+    for chat, message_id, _ in await _posts(quiz):
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat, message_id=message_id, reply_markup=markup)
+        except Exception:
+            pass
 
 
 async def choose_winner(bot: Bot, answer_id: int) -> tuple[bool, str]:
@@ -153,9 +174,10 @@ async def reopen(bot: Bot, quiz_id: int) -> None:
 
 async def delete(bot: Bot, quiz_id: int, from_channel: bool) -> None:
     quiz = await db.get_quiz(quiz_id)
-    if from_channel and quiz and quiz["channel_message_id"]:
-        try:
-            await bot.delete_message(chat_ref(quiz["channel_chat_id"]), quiz["channel_message_id"])
-        except Exception:
-            pass
+    if from_channel and quiz:
+        for chat, message_id, _ in await _posts(quiz):
+            try:
+                await bot.delete_message(chat, message_id)
+            except Exception:
+                pass
     await db.delete_quiz(quiz_id)

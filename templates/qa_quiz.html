@@ -12,7 +12,7 @@
     <h2>Savol</h2>
     <form method="post" action="/quiz/{{ quiz.id }}/edit">
       <textarea name="text" required>{{ quiz.title }}</textarea>
-      <div style="margin-top:10px"><button type="submit" class="sm">Saqlash (kanalda ham o'zgaradi)</button></div>
+      <div style="margin-top:10px"><button type="submit" class="sm">Saqlash (kanal / botdagi postda ham o'zgaradi)</button></div>
     </form>
   </div>
   <div class="card">
@@ -57,7 +57,7 @@
     </div>
     <form method="post" action="/quiz/{{ quiz.id }}/delete" style="margin-top:16px"
           onsubmit="return confirm('Savol va barcha javoblar o\'chirilsinmi?')">
-      <label style="font-weight:400"><input type="checkbox" name="from_channel" value="1" checked> Kanal postini ham o'chirish</label>
+      <label style="font-weight:400"><input type="checkbox" name="from_channel" value="1" checked> Kanal / botdagi postni ham o'chirish</label>
       <button class="danger sm" style="margin-top:6px">🗑 O'chirish</button>
     </form>
   </div>

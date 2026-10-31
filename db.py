@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT
 );
 CREATE INDEX IF NOT EXISTS users_username ON users (username COLLATE NOCASE);
+-- Botga joylangan viktorinaning adminlarga yuborilgan nusxalari (tahrir/o'chirish uchun)
+CREATE TABLE IF NOT EXISTS quiz_messages (
+    quiz_id INTEGER NOT NULL REFERENCES quizzes(id),
+    chat_id TEXT NOT NULL,
+    message_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS quiz_messages_quiz ON quiz_messages (quiz_id);
 """
 
 # Eski bazaga yangi ustunlar qo'shish
@@ -248,8 +255,20 @@ async def delete_quiz(quiz_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute("DELETE FROM answers WHERE quiz_id = ?", (quiz_id,))
         await conn.execute("DELETE FROM attempts WHERE quiz_id = ?", (quiz_id,))
+        await conn.execute("DELETE FROM quiz_messages WHERE quiz_id = ?", (quiz_id,))
         await conn.execute("DELETE FROM quizzes WHERE id = ?", (quiz_id,))
         await conn.commit()
+
+
+async def add_quiz_message(quiz_id: int, chat_id: int | str, message_id: int) -> None:
+    await _execute(
+        "INSERT INTO quiz_messages (quiz_id, chat_id, message_id) VALUES (?, ?, ?)",
+        (quiz_id, str(chat_id), message_id),
+    )
+
+
+async def list_quiz_messages(quiz_id: int):
+    return await _fetchall("SELECT * FROM quiz_messages WHERE quiz_id = ?", (quiz_id,))
 
 
 async def get_quiz(quiz_id: int):
