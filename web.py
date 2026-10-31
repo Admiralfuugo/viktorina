@@ -145,29 +145,52 @@ async def logout(request: Request):
 
 # --- Viktorinalar ---
 
+# Joylash manzili: kanal id'si yoki 0 — botning o'zi (post faqat adminlarga boradi)
+BOT_CHANNEL_ID = 0
+
+
+async def _target_chat(channel_id: int) -> str | None:
+    if channel_id == BOT_CHANNEL_ID:
+        return services.BOT_TARGET
+    channel = await db.get_channel(channel_id)
+    return channel["chat_id"] if channel else None
+
+
+def _published_note(chat_id: str, quiz_id: int, name: str) -> str:
+    if chat_id == services.BOT_TARGET:
+        return f"{name} #{quiz_id} botga joylandi — adminlarga yuborildi, uni kerakli kanalga ulashing"
+    return f"{name} #{quiz_id} kanalga joylandi"
+
+
+def _publish_error(chat_id: str, e: Exception) -> str:
+    if chat_id == services.BOT_TARGET:
+        return f"Botga joylab bo'lmadi: {e}"
+    return f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring."
+
+
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(auth)])
-async def dashboard(request: Request):
-    return render(request, "dashboard.html",
-                  quizzes=await db.list_quizzes(100), channels=await db.list_channels())
+async def dashboard(request: Request, bot: Bot = Depends(get_bot)):
+    return render(request, "dashboard.html", quizzes=await db.list_quizzes(100),
+                  channels=await db.list_channels(), bot_username=(await bot.me()).username)
 
 
 @app.post("/quiz/new", dependencies=[Depends(auth)])
 async def quiz_new(request: Request, channel_id: int = Form(...), text: str = Form(...),
                    reveal_text: str = Form(""),
                    photo: UploadFile | None = File(None), bot: Bot = Depends(get_bot)):
-    channel = await db.get_channel(channel_id)
-    if channel is None:
+    chat_id = await _target_chat(channel_id)
+    if chat_id is None:
         flash(request, "Kanal topilmadi", "err")
         return back("/")
     data = await photo.read() if photo and photo.filename else None
     try:
-        quiz_id = await services.publish_text(bot, channel["chat_id"], text.strip(), data,
+        quiz_id = await services.publish_text(bot, chat_id, text.strip(), data,
                                               photo.filename if data else "photo.jpg",
                                               reveal_text=reveal_text.strip())
     except Exception as e:
-        flash(request, f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring.", "err")
+        flash(request, _publish_error(chat_id, e), "err")
         return back("/")
-    flash(request, f"Viktorina #{quiz_id} kanalga joylandi")
+    flash(request, _published_note(chat_id, quiz_id, "Viktorina"))
     return back(f"/quiz/{quiz_id}")
 
 
@@ -197,10 +220,12 @@ async def quiz_rows(request: Request, quiz_id: int):
 
 @app.post("/quiz/{quiz_id}/edit", dependencies=[Depends(auth)])
 async def quiz_edit(request: Request, quiz_id: int, text: str = Form(...), bot: Bot = Depends(get_bot)):
-    await _quiz_or_404(quiz_id)
+    quiz = await _quiz_or_404(quiz_id)
     try:
         await services.edit_quiz_text(bot, quiz_id, text.strip())
-        flash(request, "Savol yangilandi (kanalda ham)")
+        # Botga joylanganda kanaldagi ulashilgan nusxalarni bot tahrirlay olmaydi
+        flash(request, "Savol yangilandi" if quiz["channel_chat_id"] == services.BOT_TARGET
+              else "Savol yangilandi (kanalda ham)")
     except Exception as e:
         flash(request, f"Tahrirlab bo'lmadi: {e}", "err")
     return back(f"/quiz/{quiz_id}")
@@ -300,9 +325,10 @@ def _qa_summary(attempts) -> list[dict]:
 
 
 @app.get("/qa", response_class=HTMLResponse, dependencies=[Depends(auth)])
-async def qa_list(request: Request):
+async def qa_list(request: Request, bot: Bot = Depends(get_bot)):
     return render(request, "qa_list.html", quizzes=await db.list_qa_quizzes(),
-                  channels=await db.list_channels(), max_attempts=MAX_ATTEMPTS)
+                  channels=await db.list_channels(), max_attempts=MAX_ATTEMPTS,
+                  bot_username=(await bot.me()).username)
 
 
 @app.post("/qa/new", dependencies=[Depends(auth)])
@@ -312,21 +338,21 @@ async def qa_new(request: Request, channel_id: int = Form(...), text: str = Form
     if not matcher.variants(answers):
         flash(request, "Kamida bitta to'g'ri javob kiriting", "err")
         return back("/qa")
-    channel = await db.get_channel(channel_id)
-    if channel is None:
+    chat_id = await _target_chat(channel_id)
+    if chat_id is None:
         flash(request, "Kanal topilmadi", "err")
         return back("/qa")
     data = await photo.read() if photo and photo.filename else None
     try:
         quiz_id = await services.publish_text(
-            bot, channel["chat_id"], text.strip(), data, photo.filename if data else "photo.jpg",
+            bot, chat_id, text.strip(), data, photo.filename if data else "photo.jpg",
             mode="auto", correct_answers="\n".join(matcher.variants(answers)),
             max_attempts=_attempts_arg(max_attempts), reveal_text=reveal_text.strip(),
         )
     except Exception as e:
-        flash(request, f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring.", "err")
+        flash(request, _publish_error(chat_id, e), "err")
         return back("/qa")
-    flash(request, f"Savol #{quiz_id} kanalga joylandi")
+    flash(request, _published_note(chat_id, quiz_id, "Savol"))
     return back(f"/qa/{quiz_id}")
 
 

@@ -6,6 +6,9 @@ import db
 import keyboards as kb
 import texts
 
+# Kanal o'rniga "botning o'ziga" joylash: post faqat adminlarga boradi, ular kanalga ulashadi
+BOT_TARGET = "bot"
+
 
 def chat_ref(chat_id: str) -> int | str:
     return int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
@@ -16,6 +19,34 @@ async def _markup(bot: Bot, quiz_id: int):
     return kb.channel_kb(me.username, quiz_id, await texts.get("button"))
 
 
+async def _send_to_admins(send) -> None:
+    """Postni har bir adminga yuboradi; hech kimga yetmasa exception."""
+    delivered = 0
+    for admin in await db.list_admins():
+        try:
+            await send(admin["user_id"])
+            delivered += 1
+        except Exception:
+            pass  # admin botni /start qilmagan yoki bloklagan
+    if not delivered:
+        raise RuntimeError("hech bir adminga yuborib bo'lmadi (adminlar botga /start bosganini tekshiring)")
+
+
+async def _publish_to_admins(bot: Bot, quiz_id: int, text: str, photo: bytes | None, photo_name: str) -> None:
+    markup = await _markup(bot, quiz_id)
+    media = BufferedInputFile(photo, photo_name) if photo else None
+
+    async def send(user_id: int):
+        nonlocal media
+        if media:
+            sent = await bot.send_photo(user_id, media, caption=text, reply_markup=markup)
+            media = sent.photo[-1].file_id  # rasm bir marta yuklanadi
+        else:
+            await bot.send_message(user_id, text, reply_markup=markup)
+
+    await _send_to_admins(send)
+
+
 async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = None,
                        photo_name: str = "photo.jpg", mode: str = "manual",
                        correct_answers: str = "", max_attempts: int = 1, reveal_text: str = "") -> int:
@@ -23,6 +54,13 @@ async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = 
     quiz_id = await db.create_quiz(text, chat_id, has_photo=photo is not None, mode=mode,
                                    correct_answers=correct_answers, max_attempts=max_attempts,
                                    reveal_text=reveal_text)
+    if chat_id == BOT_TARGET:
+        try:
+            await _publish_to_admins(bot, quiz_id, text, photo, photo_name)
+        except Exception:
+            await db.delete_quiz(quiz_id)
+            raise
+        return quiz_id
     try:
         markup = await _markup(bot, quiz_id)
         if photo:
@@ -42,6 +80,14 @@ async def publish_copy(bot: Bot, chat_id: str, message: Message) -> int:
     """Botdagi xabarni kanalga nusxalash (bot ichidagi /new)."""
     text = message.text or message.caption or ""
     quiz_id = await db.create_quiz(text, chat_id, has_photo=bool(message.photo))
+    if chat_id == BOT_TARGET:
+        markup = await _markup(bot, quiz_id)
+        try:
+            await _send_to_admins(lambda user_id: message.copy_to(user_id, reply_markup=markup))
+        except Exception:
+            await db.delete_quiz(quiz_id)
+            raise
+        return quiz_id
     try:
         sent = await message.copy_to(chat_ref(chat_id), reply_markup=await _markup(bot, quiz_id))
     except Exception:

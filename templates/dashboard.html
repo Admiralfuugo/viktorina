@@ -4,13 +4,11 @@
 
 <div class="card">
   <h2>➕ Yangi viktorina</h2>
-  {% if not channels %}
-    <p class="muted">Avval <a href="/channels">kanal qo'shing</a>.</p>
-  {% else %}
   <form method="post" action="/quiz/new" enctype="multipart/form-data">
-    <label>Kanal</label>
+    <label>Qayerga <span class="hint">— @{{ bot_username }} tanlansa, post faqat bot adminlariga boradi, keyin uni kanalga ulashasiz</span></label>
     <select name="channel_id">
       {% for c in channels %}<option value="{{ c.id }}">{{ c.title }}</option>{% endfor %}
+      <option value="0">🤖 @{{ bot_username }} (faqat adminlar)</option>
     </select>
     <label>Savol matni <span class="hint">— HTML teglar mumkin: &lt;b&gt;qalin&lt;/b&gt;, &lt;i&gt;kursiv&lt;/i&gt;</span></label>
     <textarea name="text" required></textarea>
@@ -18,9 +16,8 @@
     <input type="text" name="reveal_text">
     <label>Rasm <span class="hint">(ixtiyoriy)</span></label>
     <input type="file" name="photo" accept="image/*">
-    <div style="margin-top:16px"><button type="submit">Kanalga joylash</button></div>
+    <div style="margin-top:16px"><button type="submit">Joylash</button></div>
   </form>
-  {% endif %}
 </div>
 
 <div class="card">

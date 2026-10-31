@@ -25,10 +25,11 @@ def subscribe_kb(channels, quiz_id: int, check_text: str) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def channels_kb(channels) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=c["title"], callback_data=f"ch:{c['id']}")] for c in channels
-    ])
+def channels_kb(channels, bot_username: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=c["title"], callback_data=f"ch:{c['id']}")] for c in channels]
+    # ch:0 — botning o'zi: post faqat adminlarga boradi
+    rows.append([InlineKeyboardButton(text=f"🤖 @{bot_username} (faqat adminlar)", callback_data="ch:0")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def quizzes_kb(quizzes) -> InlineKeyboardMarkup:
