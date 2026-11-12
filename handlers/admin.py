@@ -49,29 +49,28 @@ async def cancel(message: Message, state: FSMContext):
 
 
 @router.message(Command("new"))
-async def new_quiz(message: Message, state: FSMContext):
+async def new_quiz(message: Message, state: FSMContext, bot: Bot):
     channels = await db.list_channels()
-    if not channels:
-        await message.answer("Avval veb-panelda kanal qo'shing.")
-        return
-    if len(channels) == 1:
-        await state.set_state(NewQuiz.waiting_post)
-        await state.update_data(chat_id=channels[0]["chat_id"])
-        await message.answer(f"Kanal: {html.escape(channels[0]['title'])}\nViktorina savolini yuboring (matn yoki rasm + izoh).")
-        return
     await state.set_state(NewQuiz.choosing_channel)
-    await message.answer("Qaysi kanalga joylaymiz?", reply_markup=kb.channels_kb(channels))
+    await message.answer("Qayerga joylaymiz?",
+                         reply_markup=kb.channels_kb(channels, (await bot.me()).username))
 
 
 @router.callback_query(NewQuiz.choosing_channel, F.data.startswith("ch:"))
-async def pick_channel(call: CallbackQuery, state: FSMContext):
-    channel = await db.get_channel(int(call.data.split(":")[1]))
-    if channel is None:
-        await call.answer("Kanal topilmadi", show_alert=True)
-        return
+async def pick_channel(call: CallbackQuery, state: FSMContext, bot: Bot):
+    channel_id = int(call.data.split(":")[1])
+    if channel_id == 0:
+        chat_id = services.BOT_TARGET
+        title = f"@{(await bot.me()).username} (faqat adminlar, keyin kanalga ulashasiz)"
+    else:
+        channel = await db.get_channel(channel_id)
+        if channel is None:
+            await call.answer("Kanal topilmadi", show_alert=True)
+            return
+        chat_id, title = channel["chat_id"], channel["title"]
     await state.set_state(NewQuiz.waiting_post)
-    await state.update_data(chat_id=channel["chat_id"])
-    await call.message.edit_text(f"Kanal: {html.escape(channel['title'])}\nViktorina savolini yuboring (matn yoki rasm + izoh).")
+    await state.update_data(chat_id=chat_id)
+    await call.message.edit_text(f"Joy: {html.escape(title)}\nViktorina savolini yuboring (matn yoki rasm + izoh).")
     await call.answer()
 
 
@@ -85,9 +84,15 @@ async def publish_quiz(message: Message, state: FSMContext, bot: Bot):
     try:
         quiz_id = await services.publish_copy(bot, chat_id, message)
     except Exception as e:
-        await message.answer(f"Kanalga joylab bo'lmadi: {html.escape(str(e))}\nBot kanalda admin ekanini tekshiring.")
+        if chat_id == services.BOT_TARGET:
+            await message.answer(f"Botga joylab bo'lmadi: {html.escape(str(e))}")
+        else:
+            await message.answer(f"Kanalga joylab bo'lmadi: {html.escape(str(e))}\nBot kanalda admin ekanini tekshiring.")
         return
-    await message.answer(f"✅ Viktorina #{quiz_id} kanalga joylandi. Javoblar: /quizzes")
+    if chat_id == services.BOT_TARGET:
+        await message.answer(f"✅ Viktorina #{quiz_id} adminlarga yuborildi — yuqoridagi postni kerakli kanalga ulashing. Javoblar: /quizzes")
+    else:
+        await message.answer(f"✅ Viktorina #{quiz_id} kanalga joylandi. Javoblar: /quizzes")
 
 
 async def _show_quizzes(target: Message, edit: bool):

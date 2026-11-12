@@ -46,6 +46,20 @@ CREATE TABLE IF NOT EXISTS channels (
     chat_id TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL
 );
+-- Botga yozgan foydalanuvchilar: adminni @username bilan qo'shish uchun
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    full_name TEXT
+);
+CREATE INDEX IF NOT EXISTS users_username ON users (username COLLATE NOCASE);
+-- Botga joylangan viktorinaning adminlarga yuborilgan nusxalari (tahrir/o'chirish uchun)
+CREATE TABLE IF NOT EXISTS quiz_messages (
+    quiz_id INTEGER NOT NULL REFERENCES quizzes(id),
+    chat_id TEXT NOT NULL,
+    message_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS quiz_messages_quiz ON quiz_messages (quiz_id);
 """
 
 # Eski bazaga yangi ustunlar qo'shish
@@ -62,6 +76,9 @@ MIGRATIONS = [
     "ALTER TABLE quizzes ADD COLUMN reveal_text TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE channels ADD COLUMN required INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE channels ADD COLUMN link TEXT",
+    "ALTER TABLE admins ADD COLUMN username TEXT",
+    # Joriy rasm (panelda ko'rsatish va almashtirish uchun)
+    "ALTER TABLE quizzes ADD COLUMN photo_file_id TEXT",
 ]
 
 
@@ -94,6 +111,12 @@ async def init_db(seed_admins: set[int], seed_channel: int | str | None) -> None
                 await conn.execute(sql)
             except aiosqlite.OperationalError:
                 pass  # ustun allaqachon bor
+        # Oldin javob yuborganlar ham @username bo'yicha topilsin
+        for table in ("answers", "attempts"):
+            await conn.execute(
+                f"INSERT OR IGNORE INTO users (user_id, username, full_name) "
+                f"SELECT user_id, username, full_name FROM {table} GROUP BY user_id"
+            )
         for admin_id in seed_admins:
             await conn.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,))
         if seed_channel:
@@ -137,16 +160,33 @@ async def is_admin(user_id: int) -> bool:
     return await _fetchone("SELECT 1 FROM admins WHERE user_id = ?", (user_id,)) is not None
 
 
-async def add_admin(user_id: int, name: str) -> None:
+async def add_admin(user_id: int, name: str, username: str | None = None) -> None:
     await _execute(
-        "INSERT INTO admins (user_id, name) VALUES (?, ?) "
-        "ON CONFLICT(user_id) DO UPDATE SET name = excluded.name",
-        (user_id, name),
+        "INSERT INTO admins (user_id, name, username) VALUES (?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, "
+        "username = COALESCE(excluded.username, admins.username)",
+        (user_id, name, username),
     )
 
 
 async def remove_admin(user_id: int) -> None:
     await _execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
+
+
+# --- Botga yozgan foydalanuvchilar ---
+
+async def save_user(user_id: int, username: str | None, full_name: str) -> None:
+    await _execute(
+        "INSERT INTO users (user_id, username, full_name) VALUES (?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, full_name = excluded.full_name",
+        (user_id, username, full_name),
+    )
+
+
+async def find_user_by_username(username: str):
+    return await _fetchone(
+        "SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username.lstrip("@"),)
+    )
 
 
 # --- Kanallar ---
@@ -213,12 +253,28 @@ async def update_quiz_title(quiz_id: int, title: str) -> None:
     await _execute("UPDATE quizzes SET title = ? WHERE id = ?", (title, quiz_id))
 
 
+async def set_quiz_photo(quiz_id: int, file_id: str) -> None:
+    await _execute("UPDATE quizzes SET photo_file_id = ? WHERE id = ?", (file_id, quiz_id))
+
+
 async def delete_quiz(quiz_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute("DELETE FROM answers WHERE quiz_id = ?", (quiz_id,))
         await conn.execute("DELETE FROM attempts WHERE quiz_id = ?", (quiz_id,))
+        await conn.execute("DELETE FROM quiz_messages WHERE quiz_id = ?", (quiz_id,))
         await conn.execute("DELETE FROM quizzes WHERE id = ?", (quiz_id,))
         await conn.commit()
+
+
+async def add_quiz_message(quiz_id: int, chat_id: int | str, message_id: int) -> None:
+    await _execute(
+        "INSERT INTO quiz_messages (quiz_id, chat_id, message_id) VALUES (?, ?, ?)",
+        (quiz_id, str(chat_id), message_id),
+    )
+
+
+async def list_quiz_messages(quiz_id: int):
+    return await _fetchall("SELECT * FROM quiz_messages WHERE quiz_id = ?", (quiz_id,))
 
 
 async def get_quiz(quiz_id: int):

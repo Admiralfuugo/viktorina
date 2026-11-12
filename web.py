@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from openpyxl import Workbook
 from starlette.middleware.sessions import SessionMiddleware
@@ -16,6 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import db
 import matcher
 import services
+import stats
 import texts
 from config import PANEL_PASSWORD, PANEL_SECURE, PANEL_USER, SECRET_KEY
 
@@ -145,29 +146,57 @@ async def logout(request: Request):
 
 # --- Viktorinalar ---
 
+# Joylash manzili: kanal id'si yoki 0 — botning o'zi (post faqat adminlarga boradi)
+BOT_CHANNEL_ID = 0
+
+
+async def _target_chat(channel_id: int) -> str | None:
+    if channel_id == BOT_CHANNEL_ID:
+        return services.BOT_TARGET
+    channel = await db.get_channel(channel_id)
+    return channel["chat_id"] if channel else None
+
+
+def _published_note(chat_id: str, quiz_id: int, name: str) -> str:
+    if chat_id == services.BOT_TARGET:
+        return f"{name} #{quiz_id} botga joylandi — adminlarga yuborildi, uni kerakli kanalga ulashing"
+    return f"{name} #{quiz_id} kanalga joylandi"
+
+
+def _publish_error(chat_id: str, e: Exception) -> str:
+    if chat_id == services.BOT_TARGET:
+        return f"Botga joylab bo'lmadi: {e}"
+    return f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring."
+
+
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(auth)])
-async def dashboard(request: Request):
-    return render(request, "dashboard.html",
-                  quizzes=await db.list_quizzes(100), channels=await db.list_channels())
+async def home(request: Request):
+    return render(request, "home.html", s=await stats.build())
+
+
+@app.get("/quizzes", response_class=HTMLResponse, dependencies=[Depends(auth)])
+async def dashboard(request: Request, bot: Bot = Depends(get_bot)):
+    return render(request, "dashboard.html", quizzes=await db.list_quizzes(100),
+                  channels=await db.list_channels(), bot_username=(await bot.me()).username)
 
 
 @app.post("/quiz/new", dependencies=[Depends(auth)])
 async def quiz_new(request: Request, channel_id: int = Form(...), text: str = Form(...),
                    reveal_text: str = Form(""),
                    photo: UploadFile | None = File(None), bot: Bot = Depends(get_bot)):
-    channel = await db.get_channel(channel_id)
-    if channel is None:
+    chat_id = await _target_chat(channel_id)
+    if chat_id is None:
         flash(request, "Kanal topilmadi", "err")
-        return back("/")
+        return back("/quizzes")
     data = await photo.read() if photo and photo.filename else None
     try:
-        quiz_id = await services.publish_text(bot, channel["chat_id"], text.strip(), data,
+        quiz_id = await services.publish_text(bot, chat_id, text.strip(), data,
                                               photo.filename if data else "photo.jpg",
                                               reveal_text=reveal_text.strip())
     except Exception as e:
-        flash(request, f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring.", "err")
-        return back("/")
-    flash(request, f"Viktorina #{quiz_id} kanalga joylandi")
+        flash(request, _publish_error(chat_id, e), "err")
+        return back("/quizzes")
+    flash(request, _published_note(chat_id, quiz_id, "Viktorina"))
     return back(f"/quiz/{quiz_id}")
 
 
@@ -196,14 +225,31 @@ async def quiz_rows(request: Request, quiz_id: int):
 
 
 @app.post("/quiz/{quiz_id}/edit", dependencies=[Depends(auth)])
-async def quiz_edit(request: Request, quiz_id: int, text: str = Form(...), bot: Bot = Depends(get_bot)):
-    await _quiz_or_404(quiz_id)
+async def quiz_edit(request: Request, quiz_id: int, text: str = Form(...),
+                    photo: UploadFile | None = File(None), bot: Bot = Depends(get_bot)):
+    quiz = await _quiz_or_404(quiz_id)
+    data = await photo.read() if photo and photo.filename else None
     try:
-        await services.edit_quiz_text(bot, quiz_id, text.strip())
-        flash(request, "Savol yangilandi (kanalda ham)")
+        await services.edit_quiz_text(bot, quiz_id, text.strip(), data,
+                                      photo.filename if data else "photo.jpg")
+        what = "Savol va rasm yangilandi" if data else "Savol yangilandi"
+        flash(request, f"{what} (botdagi xabarlarda ham)"
+              if quiz["channel_chat_id"] == services.BOT_TARGET else f"{what} (kanalda ham)")
     except Exception as e:
         flash(request, f"Tahrirlab bo'lmadi: {e}", "err")
     return back(f"/quiz/{quiz_id}")
+
+
+@app.get("/quiz/{quiz_id}/photo", dependencies=[Depends(auth)])
+async def quiz_photo(quiz_id: int, bot: Bot = Depends(get_bot)):
+    quiz = await _quiz_or_404(quiz_id)
+    try:
+        data = await services.quiz_photo(bot, quiz)
+    except Exception:
+        data = None
+    if not data:
+        raise HTTPException(404, "Rasm topilmadi")
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
 @app.post("/quiz/{quiz_id}/reveal", dependencies=[Depends(auth)])
@@ -234,7 +280,7 @@ async def quiz_delete(request: Request, quiz_id: int, from_channel: str | None =
     quiz = await _quiz_or_404(quiz_id)
     await services.delete(bot, quiz_id, from_channel=bool(from_channel))
     flash(request, f"Viktorina #{quiz_id} o'chirildi")
-    return back("/qa" if quiz["mode"] == "auto" else "/")
+    return back("/qa" if quiz["mode"] == "auto" else "/quizzes")
 
 
 @app.post("/answer/{answer_id}/win", dependencies=[Depends(auth)])
@@ -242,7 +288,7 @@ async def answer_win(request: Request, answer_id: int, bot: Bot = Depends(get_bo
     answer = await db.get_answer(answer_id)
     ok, note = await services.choose_winner(bot, answer_id)
     flash(request, ("G'olib tanlandi. " if ok else "") + note, "ok" if ok else "err")
-    return back(f"/quiz/{answer['quiz_id']}" if answer else "/")
+    return back(f"/quiz/{answer['quiz_id']}" if answer else "/quizzes")
 
 
 @app.post("/answer/{answer_id}/delete", dependencies=[Depends(auth)])
@@ -250,7 +296,7 @@ async def answer_delete(request: Request, answer_id: int):
     answer = await db.get_answer(answer_id)
     await db.delete_answer(answer_id)
     flash(request, "Javob o'chirildi (foydalanuvchi qayta javob bera oladi)")
-    return back(f"/quiz/{answer['quiz_id']}" if answer else "/")
+    return back(f"/quiz/{answer['quiz_id']}" if answer else "/quizzes")
 
 
 @app.get("/quiz/{quiz_id}/export", dependencies=[Depends(auth)])
@@ -300,9 +346,10 @@ def _qa_summary(attempts) -> list[dict]:
 
 
 @app.get("/qa", response_class=HTMLResponse, dependencies=[Depends(auth)])
-async def qa_list(request: Request):
+async def qa_list(request: Request, bot: Bot = Depends(get_bot)):
     return render(request, "qa_list.html", quizzes=await db.list_qa_quizzes(),
-                  channels=await db.list_channels(), max_attempts=MAX_ATTEMPTS)
+                  channels=await db.list_channels(), max_attempts=MAX_ATTEMPTS,
+                  bot_username=(await bot.me()).username)
 
 
 @app.post("/qa/new", dependencies=[Depends(auth)])
@@ -312,21 +359,21 @@ async def qa_new(request: Request, channel_id: int = Form(...), text: str = Form
     if not matcher.variants(answers):
         flash(request, "Kamida bitta to'g'ri javob kiriting", "err")
         return back("/qa")
-    channel = await db.get_channel(channel_id)
-    if channel is None:
+    chat_id = await _target_chat(channel_id)
+    if chat_id is None:
         flash(request, "Kanal topilmadi", "err")
         return back("/qa")
     data = await photo.read() if photo and photo.filename else None
     try:
         quiz_id = await services.publish_text(
-            bot, channel["chat_id"], text.strip(), data, photo.filename if data else "photo.jpg",
+            bot, chat_id, text.strip(), data, photo.filename if data else "photo.jpg",
             mode="auto", correct_answers="\n".join(matcher.variants(answers)),
             max_attempts=_attempts_arg(max_attempts), reveal_text=reveal_text.strip(),
         )
     except Exception as e:
-        flash(request, f"Kanalga joylab bo'lmadi: {e}. Bot kanalda admin ekanini tekshiring.", "err")
+        flash(request, _publish_error(chat_id, e), "err")
         return back("/qa")
-    flash(request, f"Savol #{quiz_id} kanalga joylandi")
+    flash(request, _published_note(chat_id, quiz_id, "Savol"))
     return back(f"/qa/{quiz_id}")
 
 
@@ -434,17 +481,33 @@ async def texts_reset(request: Request, key: str):
 # --- Adminlar ---
 
 @app.get("/admins", response_class=HTMLResponse, dependencies=[Depends(auth)])
-async def admins_page(request: Request):
-    return render(request, "admins.html", admins=await db.list_admins())
+async def admins_page(request: Request, bot: Bot = Depends(get_bot)):
+    return render(request, "admins.html", admins=await db.list_admins(),
+                  bot_username=(await bot.me()).username)
 
 
 @app.post("/admins/add", dependencies=[Depends(auth)])
-async def admins_add(request: Request, user_id: str = Form(...), name: str = Form("")):
-    if not user_id.strip().isdigit():
-        flash(request, "Telegram ID faqat raqamlardan iborat bo'lishi kerak", "err")
+async def admins_add(request: Request, user_id: str = Form(...), name: str = Form(""),
+                     bot: Bot = Depends(get_bot)):
+    # Telegram ID yoki @username (username bot eslab qolgan foydalanuvchilardan qidiriladi)
+    value = user_id.strip().replace("https://t.me/", "").replace("t.me/", "")
+    name = name.strip()
+    if value.isdigit():
+        await db.add_admin(int(value), name)
+        flash(request, "Admin qo'shildi")
         return back("/admins")
-    await db.add_admin(int(user_id), name.strip())
-    flash(request, "Admin qo'shildi")
+    username = value.lstrip("@")
+    if not username or not username.replace("_", "").isalnum():
+        flash(request, "Telegram ID (raqam) yoki @username kiriting", "err")
+        return back("/admins")
+    found = await db.find_user_by_username(username)
+    if found is None:
+        me = (await bot.me()).username
+        flash(request, f"@{username} topilmadi. U avval @{me} botiga /start bosishi kerak, "
+                       "so'ng qayta qo'shib ko'ring.", "err")
+        return back("/admins")
+    await db.add_admin(found["user_id"], name or found["full_name"] or "", found["username"])
+    flash(request, f"Admin qo'shildi: @{found['username']} (ID {found['user_id']})")
     return back("/admins")
 
 

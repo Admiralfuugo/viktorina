@@ -1,10 +1,16 @@
 """Bot va panel uchun umumiy amallar."""
+import logging
+
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, Message
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import BufferedInputFile, InputMediaPhoto, Message
 
 import db
 import keyboards as kb
 import texts
+
+# Kanal o'rniga "botning o'ziga" joylash: post faqat adminlarga boradi, ular kanalga ulashadi
+BOT_TARGET = "bot"
 
 
 def chat_ref(chat_id: str) -> int | str:
@@ -16,6 +22,37 @@ async def _markup(bot: Bot, quiz_id: int):
     return kb.channel_kb(me.username, quiz_id, await texts.get("button"))
 
 
+async def _send_to_admins(quiz_id: int, send) -> None:
+    """Postni har bir adminga yuboradi va nusxalarni eslab qoladi; hech kimga yetmasa exception."""
+    delivered = 0
+    for admin in await db.list_admins():
+        try:
+            sent = await send(admin["user_id"])
+        except Exception:
+            continue  # admin botni /start qilmagan yoki bloklagan
+        await db.add_quiz_message(quiz_id, admin["user_id"], sent.message_id)
+        delivered += 1
+    if not delivered:
+        raise RuntimeError("hech bir adminga yuborib bo'lmadi (adminlar botga /start bosganini tekshiring)")
+
+
+async def _publish_to_admins(bot: Bot, quiz_id: int, text: str, photo: bytes | None, photo_name: str) -> None:
+    markup = await _markup(bot, quiz_id)
+    media = BufferedInputFile(photo, photo_name) if photo else None
+
+    async def send(user_id: int):
+        nonlocal media
+        if media:
+            sent = await bot.send_photo(user_id, media, caption=text, reply_markup=markup)
+            media = sent.photo[-1].file_id  # rasm bir marta yuklanadi
+            return sent
+        return await bot.send_message(user_id, text, reply_markup=markup)
+
+    await _send_to_admins(quiz_id, send)
+    if isinstance(media, str):
+        await db.set_quiz_photo(quiz_id, media)
+
+
 async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = None,
                        photo_name: str = "photo.jpg", mode: str = "manual",
                        correct_answers: str = "", max_attempts: int = 1, reveal_text: str = "") -> int:
@@ -23,6 +60,13 @@ async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = 
     quiz_id = await db.create_quiz(text, chat_id, has_photo=photo is not None, mode=mode,
                                    correct_answers=correct_answers, max_attempts=max_attempts,
                                    reveal_text=reveal_text)
+    if chat_id == BOT_TARGET:
+        try:
+            await _publish_to_admins(bot, quiz_id, text, photo, photo_name)
+        except Exception:
+            await db.delete_quiz(quiz_id)
+            raise
+        return quiz_id
     try:
         markup = await _markup(bot, quiz_id)
         if photo:
@@ -35,6 +79,8 @@ async def publish_text(bot: Bot, chat_id: str, text: str, photo: bytes | None = 
         await db.delete_quiz(quiz_id)
         raise
     await db.set_channel_message(quiz_id, sent.message_id)
+    if photo:
+        await db.set_quiz_photo(quiz_id, sent.photo[-1].file_id)
     return quiz_id
 
 
@@ -42,6 +88,16 @@ async def publish_copy(bot: Bot, chat_id: str, message: Message) -> int:
     """Botdagi xabarni kanalga nusxalash (bot ichidagi /new)."""
     text = message.text or message.caption or ""
     quiz_id = await db.create_quiz(text, chat_id, has_photo=bool(message.photo))
+    if message.photo:
+        await db.set_quiz_photo(quiz_id, message.photo[-1].file_id)
+    if chat_id == BOT_TARGET:
+        markup = await _markup(bot, quiz_id)
+        try:
+            await _send_to_admins(quiz_id, lambda user_id: message.copy_to(user_id, reply_markup=markup))
+        except Exception:
+            await db.delete_quiz(quiz_id)
+            raise
+        return quiz_id
     try:
         sent = await message.copy_to(chat_ref(chat_id), reply_markup=await _markup(bot, quiz_id))
     except Exception:
@@ -51,30 +107,71 @@ async def publish_copy(bot: Bot, chat_id: str, message: Message) -> int:
     return quiz_id
 
 
-async def edit_quiz_text(bot: Bot, quiz_id: int, text: str) -> None:
+async def _posts(quiz) -> list[tuple[int | str, int, bool]]:
+    """Viktorinaning bot yuborgan barcha xabarlari: (chat, message_id, kanal postimi)."""
+    posts = []
+    if quiz["channel_message_id"] and quiz["channel_chat_id"]:
+        posts.append((chat_ref(quiz["channel_chat_id"]), quiz["channel_message_id"], True))
+    for m in await db.list_quiz_messages(quiz["id"]):
+        posts.append((chat_ref(m["chat_id"]), m["message_id"], False))
+    return posts
+
+
+async def edit_quiz_text(bot: Bot, quiz_id: int, text: str, photo: bytes | None = None,
+                         photo_name: str = "photo.jpg") -> None:
+    """Savol matnini (va rasmli postda — rasmni) hamma joyda yangilaydi."""
     quiz = await db.get_quiz(quiz_id)
-    if quiz["channel_message_id"]:
-        markup = await _markup(bot, quiz_id) if quiz["status"] == "active" else None
-        chat = chat_ref(quiz["channel_chat_id"])
-        if quiz["has_photo"]:
-            await bot.edit_message_caption(chat_id=chat, message_id=quiz["channel_message_id"],
-                                           caption=text, reply_markup=markup)
-        else:
-            await bot.edit_message_text(text, chat_id=chat, message_id=quiz["channel_message_id"],
-                                        reply_markup=markup)
+    if photo and not quiz["has_photo"]:
+        # Telegram matnli xabarni rasmliga aylantirishga ruxsat bermaydi
+        raise ValueError("matnli postga rasm qo'shib bo'lmaydi — faqat rasmli postda rasm almashtiriladi")
+    markup = await _markup(bot, quiz_id) if quiz["status"] == "active" else None
+    media = BufferedInputFile(photo, photo_name) if photo else None
+    for chat, message_id, is_channel in await _posts(quiz):
+        try:
+            if media:
+                sent = await bot.edit_message_media(
+                    InputMediaPhoto(media=media, caption=text), chat_id=chat, message_id=message_id,
+                    reply_markup=markup,
+                )
+                if isinstance(sent, Message) and sent.photo:
+                    media = sent.photo[-1].file_id  # rasm bir marta yuklanadi
+            elif quiz["has_photo"]:
+                await bot.edit_message_caption(chat_id=chat, message_id=message_id,
+                                               caption=text, reply_markup=markup)
+            else:
+                await bot.edit_message_text(text, chat_id=chat, message_id=message_id,
+                                            reply_markup=markup)
+        except TelegramBadRequest as e:
+            if "not modified" in str(e):
+                continue
+            if is_channel:
+                raise
+            logging.warning("Admin nusxasini tahrirlab bo'lmadi (%s): %s", chat, e)
+        except Exception as e:
+            if is_channel:
+                raise
+            logging.warning("Admin nusxasini tahrirlab bo'lmadi (%s): %s", chat, e)
     await db.update_quiz_title(quiz_id, text)
+    if isinstance(media, str):
+        await db.set_quiz_photo(quiz_id, media)
+
+
+async def quiz_photo(bot: Bot, quiz) -> bytes | None:
+    """Panelda ko'rsatish uchun joriy rasmni Telegram'dan yuklab oladi."""
+    if not quiz["photo_file_id"]:
+        return None
+    file = await bot.get_file(quiz["photo_file_id"])
+    buf = await bot.download_file(file.file_path)
+    return buf.read()
 
 
 async def _set_button(bot: Bot, quiz, show: bool) -> None:
-    if not quiz["channel_message_id"] or not quiz["channel_chat_id"]:
-        return
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=chat_ref(quiz["channel_chat_id"]), message_id=quiz["channel_message_id"],
-            reply_markup=await _markup(bot, quiz["id"]) if show else None,
-        )
-    except Exception:
-        pass
+    markup = await _markup(bot, quiz["id"]) if show else None
+    for chat, message_id, _ in await _posts(quiz):
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat, message_id=message_id, reply_markup=markup)
+        except Exception:
+            pass
 
 
 async def choose_winner(bot: Bot, answer_id: int) -> tuple[bool, str]:
@@ -107,9 +204,10 @@ async def reopen(bot: Bot, quiz_id: int) -> None:
 
 async def delete(bot: Bot, quiz_id: int, from_channel: bool) -> None:
     quiz = await db.get_quiz(quiz_id)
-    if from_channel and quiz and quiz["channel_message_id"]:
-        try:
-            await bot.delete_message(chat_ref(quiz["channel_chat_id"]), quiz["channel_message_id"])
-        except Exception:
-            pass
+    if from_channel and quiz:
+        for chat, message_id, _ in await _posts(quiz):
+            try:
+                await bot.delete_message(chat, message_id)
+            except Exception:
+                pass
     await db.delete_quiz(quiz_id)
